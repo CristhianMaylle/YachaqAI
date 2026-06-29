@@ -50,6 +50,7 @@ LLM_PROVIDERS: dict[str, dict] = {
             {"id": "deepseek-ai/deepseek-v4-pro", "label": "DeepSeek V4 Pro", "tier": "quality"},
             {"id": "nvidia/nemotron-3-ultra-550b-a55b", "label": "Nemotron 3 Ultra 550B", "tier": "quality"},
             {"id": "minimaxai/minimax-m3", "label": "MiniMax M3", "tier": "fast"},
+            {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tier": "quality"},
         ],
     },
 }
