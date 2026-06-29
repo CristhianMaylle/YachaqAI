@@ -46,10 +46,10 @@ LLM_PROVIDERS: dict[str, dict] = {
         "env_key": "nvidia_api_key",
         "label": "NVIDIA NIM",
         "models": [
-            {"id": "nvidia/llama-3.1-nemotron-70b-instruct", "label": "Llama 3.1 Nemotron 70B", "tier": "quality"},
-            {"id": "meta/llama-3.3-70b-instruct", "label": "Llama 3.3 70B", "tier": "quality"},
-            {"id": "meta/llama-3.1-8b-instruct", "label": "Llama 3.1 8B", "tier": "fast"},
-            {"id": "mistralai/mixtral-8x7b-instruct-v0.1", "label": "Mixtral 8x7B", "tier": "fast"},
+            {"id": "deepseek-ai/deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "fast"},
+            {"id": "deepseek-ai/deepseek-v4-pro", "label": "DeepSeek V4 Pro", "tier": "quality"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b", "label": "Nemotron 3 Ultra 550B", "tier": "quality"},
+            {"id": "minimaxai/minimax-m3", "label": "MiniMax M3", "tier": "fast"},
         ],
     },
 }
@@ -253,15 +253,34 @@ class LLMGateway:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
-        kwargs: dict = {"model": self._active_model, "messages": messages}
+        kwargs: dict = {
+            "model": self._active_model,
+            "messages": messages,
+            "stream": False
+        }
+
+        # Aplicar parámetros específicos para DeepSeek con soporte para razonamiento (thinking)
+        if "deepseek" in self._active_model.lower():
+            kwargs["temperature"] = 1.0
+            kwargs["top_p"] = 0.95
+            kwargs["max_tokens"] = 16384
+            kwargs["extra_body"] = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
+
         if response_format == "json":
             kwargs["response_format"] = {"type": "json_object"}
 
         response = client.chat.completions.create(**kwargs)
         choice = response.choices[0]
+        
+        # Extraer y registrar el razonamiento del modelo si está disponible
+        reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)
+        if reasoning:
+            logger.info(f"NVIDIA DeepSeek Reasoning:\n{reasoning}")
+
         usage = {}
         if response.usage:
             usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
+        
         return LLMResponse(text=choice.message.content or "", model=self._active_model, provider="nvidia", usage=usage)
 
 
