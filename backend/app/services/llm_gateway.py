@@ -42,6 +42,16 @@ LLM_PROVIDERS: dict[str, dict] = {
             {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5", "tier": "fast"},
         ],
     },
+    "nvidia": {
+        "env_key": "nvidia_api_key",
+        "label": "NVIDIA NIM",
+        "models": [
+            {"id": "nvidia/llama-3.1-nemotron-70b-instruct", "label": "Llama 3.1 Nemotron 70B", "tier": "quality"},
+            {"id": "meta/llama-3.3-70b-instruct", "label": "Llama 3.3 70B", "tier": "quality"},
+            {"id": "meta/llama-3.1-8b-instruct", "label": "Llama 3.1 8B", "tier": "fast"},
+            {"id": "mistralai/mixtral-8x7b-instruct-v0.1", "label": "Mixtral 8x7B", "tier": "fast"},
+        ],
+    },
 }
 
 
@@ -130,6 +140,8 @@ class LLMGateway:
                 return await self._call_openai(prompt, system, response_format)
             if self._active_provider == "anthropic":
                 return await self._call_anthropic(prompt, system, response_format)
+            if self._active_provider == "nvidia":
+                return await self._call_nvidia(prompt, system, response_format)
             raise LLMError(f"Proveedor desconocido: {self._active_provider}")
         except LLMError:
             raise
@@ -228,6 +240,29 @@ class LLMGateway:
             provider="anthropic",
             usage={"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens},
         )
+
+    async def _call_nvidia(self, prompt: str, system: str, response_format: str) -> LLMResponse:
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key=self._settings.nvidia_api_key
+        )
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs: dict = {"model": self._active_model, "messages": messages}
+        if response_format == "json":
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        usage = {}
+        if response.usage:
+            usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
+        return LLMResponse(text=choice.message.content or "", model=self._active_model, provider="nvidia", usage=usage)
 
 
 gateway = LLMGateway(settings)
