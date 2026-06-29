@@ -55,9 +55,9 @@ Sprint 2 (Grafo + Lectura) ──> Sprint 3 (Estudio + SRS)
 | 4 | **Pipeline de ingesta completo** | El corazon del sistema. Secuencia: | -- |
 | | 4a. Extraccion de texto | LlamaParse extrae texto estructurado del PDF. Fallback: Tesseract OCR si < 100 chars | -- |
 | | 4b. Agente de Ingesta (Gemini 2.5 Flash) | Prompt al LLM con el texto extraido + esquema YACHAQ.md. El agente identifica: conceptos, entidades, relaciones, prerrequisitos. Genera archivos .md con frontmatter YAML | -- |
-| | 4c. Generacion de estructura wiki | Crear carpetas: `1. fuentes_transformadas/`, `2. conceptos/`, `3. entidades/`, `4. preguntas/`, `5. modulos/`. Escribir cada archivo .md con `[[wikilinks]]` entre conceptos relacionados | -- |
-| | 4d. Generacion de preguntas SRS | Gemini genera 4 tipos de pregunta por concepto: completar oracion, relacionar terminos, diagrama, desarrollo | -- |
-| | 4e. Agrupacion en modulos | Gemini agrupa conceptos en modulos ordenados topologicamente segun prerrequisitos | -- |
+| | 4c. Generacion de estructura wiki | Crear carpetas: `1. fuentes_transformadas/`, `2. conceptos/`, `3. entidades/`, `5. modulos/`. Escribir cada archivo .md con `[[wikilinks]]` entre conceptos relacionados | -- |
+| | 4d. Agrupacion en modulos | Gemini agrupa conceptos en modulos ordenados topologicamente segun prerrequisitos | -- |
+| | ~~4e. Generacion de preguntas SRS~~ | **Movido a Sprint 3.** Las preguntas se generan bajo demanda al iniciar sesion de estudio (`POST /sessions/start`), no durante la ingesta. Razon: con PDFs grandes (50+ conceptos), generar preguntas en ingesta consume demasiados tokens y tiempo. Generarlas bajo demanda reduce ~40% de llamadas LLM en ingesta | -- |
 | 5 | **Estado del procesamiento** | Endpoint de polling: etapa actual (1-7), porcentaje, concepto siendo procesado | `GET /ingest/status/{jobId}` |
 | 6 | **Re-ingesta incremental** | Si el mazo ya tiene contenido: comparar contra wiki existente, actualizar conceptos ya presentes, crear nuevos, detectar contradicciones entre fuentes | `POST /ingest/pdf` (mazo existente) |
 | 7 | **Esquema YACHAQ.md** | Definir el template de reglas que controla como Gemini estructura la wiki: formato de frontmatter, tipos de nodo, convenciones de nombrado, formato de wikilinks | -- |
@@ -91,9 +91,10 @@ npm i zustand
 
 ### Entregable Sprint 1
 
-- [ ] Subir un PDF real y obtener una wiki generada por Gemini (no hardcodeada)
+- [ ] Subir un PDF real y obtener una wiki generada por LLM (no hardcodeada)
 - [ ] Los archivos .md tienen frontmatter YAML valido con prerrequisitos, relacionados, estado_srs
-- [ ] Se generan conceptos, entidades, modulos y preguntas reales desde el PDF
+- [ ] Se generan conceptos, entidades y modulos reales desde el PDF
+- [ ] La carpeta `4. preguntas/` queda vacia (se llena bajo demanda en Sprint 3)
 - [ ] La barra de progreso refleja el estado real del procesamiento
 - [ ] Se puede agregar mas material a un mazo existente (re-ingesta incremental)
 - [ ] La app esta en dark mode con la paleta correcta
@@ -162,8 +163,8 @@ npm uninstall react-force-graph-2d marked
 | # | Tarea | Endpoint |
 |:---|:---|:---|
 | 1 | **Modelo de sesion** | SQLAlchemy: id, deck_id, module_id, type (nuevo/repaso/mixto), started_at, completed_at, results_json | -- |
-| 2 | **Iniciar sesion** | Crea sesion, calcula conceptos a estudiar, verifica repasos SRS pendientes. Devuelve: tipo, modulo, N conceptos, duracion estimada, N preguntas | `POST /sessions/start` |
-| 3 | **Preguntas del modulo** | Devuelve preguntas .md del mazo para ese modulo, con metadata del tipo (completar/relacionar/diagrama/desarrollo) | `GET /sessions/{sessionId}/questions` |
+| 2 | **Iniciar sesion** | Crea sesion, calcula conceptos a estudiar, verifica repasos SRS pendientes. **Genera preguntas bajo demanda** con LLM si `4. preguntas/` no tiene archivo para los conceptos del modulo (movido desde Sprint 1 para optimizar tokens). Devuelve: tipo, modulo, N conceptos, duracion estimada, N preguntas | `POST /sessions/start` |
+| 3 | **Preguntas del modulo** | Devuelve preguntas .md del mazo para ese modulo. Si no existen, las genera con LLM en el momento (4 tipos: completar, relacionar, diagrama, desarrollo). Las preguntas generadas se cachean en `4. preguntas/` para reutilizar | `GET /sessions/{sessionId}/questions` |
 | 4 | **Registrar calificacion + Agente Evaluador** | Para tipos 1-3: auto-calificacion (100%=Excelente, 70-99%=Bien, 1-69%=Dificil, 0%=Olvidado). Para tipo 4: Gemini 2.5 Flash evalua respuesta -> ideas cubiertas, omitidas, errores, calificacion sugerida, justificacion, tip de estudio. Actualizar FSRS real con py-fsrs: retentiva, estabilidad, dificultad, proximo_repaso | `POST /srs/response` |
 | 5 | **Conceptos vencidos hoy** | Nodos cuyo proximo_repaso <= hoy, priorizados por criticidad. Max 20 si ausencia > 30 dias ("sesion de rehabilitacion") | `GET /srs/due` |
 | 6 | **Propagacion Graph-SRS** | Si "Olvidado": propagar incertidumbre a nodos dependientes via grafo de prerrequisitos (NetworkX) | Interno |
@@ -197,8 +198,9 @@ npm i recharts canvas-confetti
 ### Entregable Sprint 3
 
 - [ ] Sesion completa: preparacion -> lectura -> cuestionario -> resumen
+- [ ] Generacion de preguntas bajo demanda al iniciar sesion (no en ingesta)
 - [ ] 4 tipos de pregunta con correccion real (no simulada)
-- [ ] Evaluacion IA de respuestas de desarrollo con Gemini (ideas cubiertas, errores, tip)
+- [ ] Evaluacion IA de respuestas de desarrollo (ideas cubiertas, errores, tip)
 - [ ] FSRS real con py-fsrs (intervalos calculados, no hardcodeados)
 - [ ] Bifurcacion post-evaluacion: ruta >=70% (recursos) vs <70% (refuerzo)
 - [ ] Repaso SRS con cola diaria, max 20 si ausencia prolongada

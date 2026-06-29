@@ -17,7 +17,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 export const api = {
   ingest: {
     process: (formData: FormData) =>
-      fetch(`${FASTAPI_URL}/ingest/process`, { method: 'POST', body: formData }).then(r => r.json()) as Promise<{ job_id: string; status: string }>,
+      fetch(`${FASTAPI_URL}/ingest/process`, { method: 'POST', body: formData }).then(r => r.json()) as Promise<{ job_id: string; status: string; deck_id: string }>,
     status: (jobId: string) =>
       request<IngestJob>(`/ingest/status/${jobId}`),
     confirmReview: (jobId: string, items: ReviewItem[]) =>

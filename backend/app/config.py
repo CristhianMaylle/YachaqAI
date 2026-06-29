@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: str
+    supabase_db_url: str = ""
     llamaparse_api_key: str = ""
 
     google_ai_api_key: str = ""

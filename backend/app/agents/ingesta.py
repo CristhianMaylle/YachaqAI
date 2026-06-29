@@ -122,40 +122,6 @@ REGLAS:
 - estado_srs siempre empieza en "bloqueado", maestria en 0
 - Escribe en espanol. Terminos tecnicos en ingles se mantienen."""
 
-QUESTION_SYSTEM = """\
-Genera preguntas SRS para un concepto educativo. Produce exactamente 4 preguntas \
-en formato Markdown con frontmatter YAML.
-
-FORMATO:
----
-id: "q-{slug}"
-tipo: "pregunta"
-concepto_asociado: "2. conceptos/{slug}.md"
-subtipo_cuestionario: "mixto"
-creado: "{today}"
----
-
-# Cuestionario: {title}
-
-## Pregunta 1 -- Completar la Oracion
-[Enunciado con `[___]` en los espacios a completar]
-> **Respuesta:** [respuesta correcta]
-
-## Pregunta 2 -- Relacionar Terminos
-| Termino | Definicion |
-|:---|:---|
-| A. Termino1 | __ Definicion que corresponde |
-| B. Termino2 | __ Otra definicion |
-> **Respuestas:** A-2, B-1 (etc.)
-
-## Pregunta 3 -- Completar la Oracion
-[Segundo enunciado de completar]
-> **Respuesta:** [respuesta correcta]
-
-## Pregunta 4 -- Desarrollo Conceptual
-[Pregunta abierta que requiera explicacion de 3-5 oraciones]
-> **Respuesta Esperada:** [respuesta modelo de referencia]"""
-
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -176,6 +142,15 @@ def _parse_analysis_json(text: str) -> dict:
     if "items" not in data:
         data = {"items": [], "modules": [], "source_summary": ""}
     return data
+
+
+def _safe_slug(text: str) -> str:
+    """Convierte cualquier texto a un slug seguro para Supabase Storage."""
+    import unicodedata
+    s = unicodedata.normalize("NFD", text.lower())
+    s = re.sub(r"[̀-ͯ]", "", s)
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")[:80]
 
 
 def _today() -> str:
@@ -216,10 +191,9 @@ async def run_ingesta_pipeline(
             update("error", 0, "Error", error_message="No se pudo extraer texto del PDF")
             return
 
-        # Guardar texto extraido para Step 2
-        supabase.table("ingest_jobs").update({
-            "storage_path": f"{deck_id}/{source_name}",
-        }).eq("id", job_id).execute()
+        # Guardar texto extraido en Storage para reutilizar en Step 2
+        from app.services.wiki_builder import _upload_text, WIKI_BUCKET
+        _upload_text(WIKI_BUCKET, f"{deck_id}/.yachaq/extracted_{job_id}.txt", raw_text)
 
         # 2. Analizar con LLM
         update("analyzing", 30, "Analizando estructura del documento")
@@ -249,14 +223,19 @@ async def run_ingesta_pipeline(
 
         plan = _parse_analysis_json(response.text)
 
-        # Enrichir items con accepted=True por defecto
+        # Sanitizar slugs y enriquecer items
         for item in plan.get("items", []):
+            item["slug"] = _safe_slug(item.get("slug", item.get("title", "unknown")))
             item.setdefault("accepted", True)
             item.setdefault("conflict_detail", None)
-            item.setdefault("prerequisites", [])
-            item.setdefault("related", [])
-            item.setdefault("module", None)
+            item["prerequisites"] = [_safe_slug(p) for p in (item.get("prerequisites") or [])]
+            item["related"] = [_safe_slug(r) for r in (item.get("related") or [])]
+            if item.get("module"):
+                item["module"] = _safe_slug(item["module"])
             item.setdefault("summary", "")
+        for mod in plan.get("modules", []):
+            mod["slug"] = _safe_slug(mod.get("slug", mod.get("title", "unknown")))
+            mod["concepts"] = [_safe_slug(c) for c in (mod.get("concepts") or [])]
 
         n_concepts = sum(1 for i in plan["items"] if i.get("type") == "concepto")
         n_entities = sum(1 for i in plan["items"] if i.get("type") == "entidad")
@@ -317,13 +296,8 @@ async def run_generation_after_review(
             update("generating", 82, f"Generando: {entity['title']}")
             await _generate_entity(deck_id, entity, raw_text, source_name, today)
 
-        # 4. Preguntas SRS
-        update("generating", 87, "Generando preguntas SRS")
-        for concept in concepts:
-            await _generate_questions(deck_id, concept, raw_text, today)
-
-        # 5. Modulos
-        update("generating", 93, "Generando modulos")
+        # 4. Modulos
+        update("generating", 90, "Generando modulos")
         for mod in modules:
             _write_module(deck_id, mod, concepts, today)
 
@@ -449,38 +423,6 @@ async def _generate_entity(
 
     _write_page_to_storage(deck_id, f"3. entidades/{entity['slug']}.md", fm_parsed, body_parsed)
 
-
-async def _generate_questions(
-    deck_id: str, concept: dict, raw_text: str, today: str,
-) -> None:
-    prompt = (
-        f'Genera preguntas SRS para el concepto "{concept["title"]}".\n\n'
-        f"Resumen: {concept.get('summary', '')}\n\n"
-        f"Texto fuente relevante (extracto):\n{raw_text[:10_000]}"
-    )
-
-    sys = QUESTION_SYSTEM.replace("{slug}", concept["slug"]).replace(
-        "{title}", concept["title"]
-    ).replace("{today}", today)
-
-    response = await gateway.generate(prompt=prompt, system=sys)
-
-    fm_parsed, body_parsed = parse_frontmatter(response.text)
-    if not fm_parsed:
-        fm_parsed = {
-            "id": f"q-{concept['slug']}",
-            "tipo": "pregunta",
-            "concepto_asociado": f"2. conceptos/{concept['slug']}.md",
-            "subtipo_cuestionario": "mixto",
-            "creado": today,
-        }
-        body_parsed = response.text
-
-    fm_parsed.setdefault("id", f"q-{concept['slug']}")
-    fm_parsed.setdefault("tipo", "pregunta")
-    fm_parsed.setdefault("concepto_asociado", f"2. conceptos/{concept['slug']}.md")
-
-    _write_page_to_storage(deck_id, f"4. preguntas/q-{concept['slug']}.md", fm_parsed, body_parsed)
 
 
 def _write_module(

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
@@ -13,8 +11,10 @@ from app.schemas.ingest import (
     IngestJobResponse,
     IngestStatusResponse,
 )
-from app.services.pdf_parser import extract_text
-from app.services.wiki_builder import create_notebook, notebook_exists, upload_pdf
+from app.services.wiki_builder import (
+    create_notebook, notebook_exists, upload_pdf, _slugify,
+    _download_text, WIKI_BUCKET,
+)
 
 router = APIRouter()
 
@@ -37,20 +37,28 @@ async def process_pdf(
     supabase = get_supabase()
     filename = file.filename or "document.pdf"
 
+    if deck_id == "new":
+        deck_id = _slugify(deck_name) if deck_name else str(uuid4())[:8]
+
+    safe_filename = _slugify(filename.removesuffix(".pdf")) + ".pdf"
+
     if not notebook_exists(deck_id):
         create_notebook(deck_name or deck_id)
+
+    storage_path = f"{deck_id}/{safe_filename}"
 
     supabase.table("ingest_jobs").insert({
         "id": job_id,
         "deck_id": deck_id,
         "source_type": "pdf",
         "source_name": filename,
+        "storage_path": storage_path,
         "status": "pending",
         "progress": 0,
         "review_status": "pending",
     }).execute()
 
-    upload_pdf(deck_id, filename, content)
+    upload_pdf(deck_id, safe_filename, content)
 
     background_tasks.add_task(
         run_ingesta_pipeline,
@@ -60,7 +68,7 @@ async def process_pdf(
         source_name=filename,
     )
 
-    return IngestJobResponse(job_id=job_id, status="pending")
+    return IngestJobResponse(job_id=job_id, status="pending", deck_id=deck_id)
 
 
 @router.get("/status/{job_id}", response_model=IngestStatusResponse)
@@ -113,14 +121,9 @@ async def confirm_review(
     deck_id = data["deck_id"]
     source_name = data["source_name"]
 
-    pdf_data = supabase.storage.from_("pdfs").download(f"{deck_id}/{source_name}")
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(pdf_data)
-        temp_path = Path(f.name)
-    try:
-        raw_text = await extract_text(temp_path)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    raw_text = _download_text(WIKI_BUCKET, f"{deck_id}/.yachaq/extracted_{job_id}.txt")
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="Texto extraido no encontrado. Sube el PDF de nuevo.")
 
     background_tasks.add_task(
         run_generation_after_review,

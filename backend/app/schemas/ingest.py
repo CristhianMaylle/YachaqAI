@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class IngestJobResponse(BaseModel):
     job_id: str
     status: str
+    deck_id: str = ""
 
 
 class ReviewItem(BaseModel):

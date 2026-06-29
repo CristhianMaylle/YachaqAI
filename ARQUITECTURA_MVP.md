@@ -518,139 +518,32 @@ uvicorn app.main:app --reload --port 8000   # FastAPI en http://localhost:8000
 
 ## 10. Esquema de Base de Datos (Supabase)
 
-```sql
--- Perfiles extendidos (auth.users lo maneja Supabase)
-CREATE TABLE profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  full_name TEXT NOT NULL,
-  timezone TEXT DEFAULT 'America/Lima',
-  streak_days INTEGER DEFAULT 0,
-  last_study_date DATE,
-  onboarding_completed BOOLEAN DEFAULT FALSE,
-  notification_prefs JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+**10 tablas** validadas contra las 29 pantallas de la especificacion y los 5 sprints.
+Script completo en `backend/scripts/setup_database.sql`.
 
-CREATE TABLE decks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT,
-  objective TEXT,
-  level TEXT,
-  exam_date DATE,
-  wiki_path TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+| Tabla | Sprint | Proposito | Columnas clave |
+|:---|:---|:---|:---|
+| `profiles` | S5 | Datos extendidos del usuario | full_name, timezone, streak_days, onboarding_completed, notification_prefs, srs_thresholds, preferred_llm_provider/model, deletion_requested_at |
+| `decks` | S1 | Mazos de estudio | name, description, objective, level, exam_date, wiki_path, updated_at |
+| `ingest_jobs` | S1 | Pipeline de ingesta PDF/URL | source_type, source_url, status (8 estados), review_items JSONB, review_status |
+| `schedule_slots` | S5 | Horarios de estudio | day_of_week (recurrente), scheduled_date (puntual), session_type, is_recurring |
+| `study_sessions` | S3 | Sesiones de estudio completadas | module_slug, session_type, duration_seconds, retentiva_avg, results JSONB |
+| `srs_states` | S3 | Estado FSRS v5 por concepto | estado (5 valores), maestria, retentiva, estabilidad, dificultad, proximo_repaso, veces_olvidado |
+| `srs_responses` | S3 | Respuestas a cuestionarios | question_type (4 tipos), grade, ai_evaluation JSONB, ai_suggested_grade |
+| `notifications` | S4 | Alertas al usuario | type (5 tipos), action_url, read |
+| `wiki_chat_messages` | S4 | Historial chat LLM Wiki | role, content, sources_consulted, nodes_visited, archived_as |
+| `lint_reports` | S4 | Cache de analisis LINT | score, status, issues JSONB, conteos por tipo de problema |
 
-CREATE TABLE ingest_jobs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
-  source_type TEXT NOT NULL,
-  source_name TEXT NOT NULL,
-  storage_path TEXT,
-  status TEXT DEFAULT 'pending',
-  progress INTEGER DEFAULT 0,
-  stage TEXT,
-  concepts_found INTEGER DEFAULT 0,
-  entities_found INTEGER DEFAULT 0,
-  modules_found INTEGER DEFAULT 0,
-  error_message TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  completed_at TIMESTAMPTZ
-);
+**RLS:** Todas las tablas tienen Row Level Security habilitado. Politicas abiertas
+temporales (`USING(true)`) para Sprints 1-4; se reemplazan en Sprint 5 con
+politicas basadas en `auth.uid()`.
 
-CREATE TABLE schedule_slots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
-  day_of_week INTEGER NOT NULL,
-  start_time TIME NOT NULL,
-  end_time TIME NOT NULL,
-  session_type TEXT DEFAULT 'nuevo'
-);
+**Triggers:** 2 triggers automaticos:
+1. `on_auth_user_created` — crea fila en `profiles` al registrarse
+2. `deck_updated_at` — actualiza `updated_at` al modificar un deck
 
-CREATE TABLE study_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
-  user_id UUID REFERENCES auth.users(id),
-  module_slug TEXT NOT NULL,
-  session_type TEXT NOT NULL,
-  started_at TIMESTAMPTZ DEFAULT now(),
-  completed_at TIMESTAMPTZ,
-  results JSONB
-);
-
-CREATE TABLE srs_states (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
-  concept_slug TEXT NOT NULL,
-  estado TEXT DEFAULT 'bloqueado',
-  maestria REAL DEFAULT 0,
-  retentiva REAL DEFAULT 0,
-  estabilidad REAL DEFAULT 0,
-  dificultad REAL DEFAULT 5.0,
-  ultimo_repaso DATE,
-  proximo_repaso DATE,
-  veces_olvidado INTEGER DEFAULT 0,
-  updated_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(deck_id, concept_slug)
-);
-
-CREATE TABLE srs_responses (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID REFERENCES study_sessions(id),
-  deck_id UUID REFERENCES decks(id),
-  concept_slug TEXT NOT NULL,
-  question_file TEXT NOT NULL,
-  question_type TEXT NOT NULL,
-  user_answer TEXT,
-  grade TEXT NOT NULL,
-  ai_evaluation JSONB,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE notifications (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
-  type TEXT NOT NULL,
-  title TEXT NOT NULL,
-  body TEXT,
-  deck_id UUID,
-  read BOOLEAN DEFAULT FALSE,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Row Level Security
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE decks ENABLE ROW LEVEL SECURITY;
-ALTER TABLE srs_states ENABLE ROW LEVEL SECURITY;
-ALTER TABLE study_sessions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE srs_responses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "own_data" ON profiles FOR ALL USING (auth.uid() = id);
-CREATE POLICY "own_decks" ON decks FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "own_srs" ON srs_states FOR ALL
-  USING (deck_id IN (SELECT id FROM decks WHERE user_id = auth.uid()));
-CREATE POLICY "own_sessions" ON study_sessions FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "own_responses" ON srs_responses FOR ALL
-  USING (deck_id IN (SELECT id FROM decks WHERE user_id = auth.uid()));
-CREATE POLICY "own_notifications" ON notifications FOR ALL USING (auth.uid() = user_id);
-
--- Trigger: crear perfil automaticamente al registrarse
-CREATE OR REPLACE FUNCTION handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO profiles (id, full_name)
-  VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', ''));
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION handle_new_user();
-```
+**Indices:** 16 indices para las consultas mas frecuentes (SRS due, sessions por deck,
+notifications unread, chat history, etc.)
 
 ---
 
@@ -750,8 +643,11 @@ PDF
 │ Salida:  archivos .md reales              │
 │   - frontmatter YAML completo             │
 │   - [[wikilinks]] entre conceptos         │
-│   - preguntas SRS (4 tipos)               │
 │   - modulos con orden topologico          │
+│                                           │
+│ NOTA: preguntas SRS NO se generan aqui.   │
+│ Se generan bajo demanda en Sprint 3       │
+│ al iniciar sesion (POST /sessions/start)  │
 │                                           │
 │ Solo genera lo que el usuario aprobo      │
 └───────────────────────────────────────────┘

@@ -18,15 +18,16 @@ const STAGES_STEP1 = [
 const STAGES_STEP2 = [
   'Generando fuente transformada',
   'Generando conceptos',
-  'Generando preguntas SRS',
+  'Generando entidades',
   'Generando módulos',
   'Actualizando índice',
 ]
 
 export function Upload() {
-  const { deckId } = useParams<{ deckId: string }>()
+  const { deckId: routeDeckId } = useParams<{ deckId: string }>()
   const navigate = useNavigate()
   const { addIngestJob, updateIngestJob } = useDeckStore()
+  const [deckId, setDeckId] = useState(routeDeckId ?? 'new')
 
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -118,10 +119,12 @@ export function Upload() {
       formData.append('deck_name', deckId)
 
       const result = await api.ingest.process(formData)
+      const realDeckId = result.deck_id || deckId
+      setDeckId(realDeckId)
       setJobId(result.job_id)
       addIngestJob({
         id: result.job_id,
-        deck_id: deckId,
+        deck_id: realDeckId,
         source_type: 'pdf',
         source_name: file.name,
         storage_path: null,

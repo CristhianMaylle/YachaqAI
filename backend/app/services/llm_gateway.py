@@ -135,30 +135,31 @@ class LLMGateway:
             raise
         except Exception as exc:
             msg = str(exc)
+            if "429" in msg or "rate" in msg.lower() or "quota" in msg.lower() or "RESOURCE_EXHAUSTED" in msg:
+                raise LLMError(f"Limite de uso alcanzado en {self._active_provider}. Cambia de modelo en Settings o intenta mas tarde") from exc
             if "401" in msg or "403" in msg or "invalid" in msg.lower():
                 env_key = LLM_PROVIDERS[self._active_provider]["env_key"].upper()
                 raise LLMError(f"API key invalida para {self._active_provider}. Verifica {env_key} en .env") from exc
-            if "429" in msg or "rate" in msg.lower():
-                raise LLMError(f"Limite de uso alcanzado en {self._active_provider}. Intenta mas tarde o cambia de modelo") from exc
             raise LLMError(f"Error del proveedor {self._active_provider}: {msg}") from exc
 
     # ── Adapters ──────────────────────────────────────────────
 
     async def _call_gemini(self, prompt: str, system: str, response_format: str) -> LLMResponse:
-        import google.generativeai as genai
+        from google import genai
 
-        genai.configure(api_key=self._settings.google_ai_api_key)
+        client = genai.Client(api_key=self._settings.google_ai_api_key)
 
-        gen_config: dict = {}
+        config: dict = {}
+        if system:
+            config["system_instruction"] = system
         if response_format == "json":
-            gen_config["response_mime_type"] = "application/json"
+            config["response_mime_type"] = "application/json"
 
-        model = genai.GenerativeModel(
-            self._active_model,
-            system_instruction=system or None,
-            generation_config=gen_config or None,
+        response = client.models.generate_content(
+            model=self._active_model,
+            contents=prompt,
+            config=config if config else None,
         )
-        response = model.generate_content(prompt)
         usage = {}
         if hasattr(response, "usage_metadata") and response.usage_metadata:
             usage = {
