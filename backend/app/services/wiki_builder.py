@@ -339,11 +339,15 @@ def build_graph(deck_id: str) -> dict:
                 _add_edge(p["page_id"], tp["page_id"], "relacionado")
 
         for rel in (p["frontmatter"].get("relacionados") or []):
+            if not rel or not isinstance(rel, str):
+                continue
             tp = next((pg for pg in pages if pg["file"] == rel or pg["file"].endswith("/" + rel)), None)
             if tp and tp["page_id"] != p["page_id"]:
                 _add_edge(p["page_id"], tp["page_id"], "relacionado")
 
         for pre in (p["frontmatter"].get("prerrequisitos") or []):
+            if not pre or not isinstance(pre, str):
+                continue
             tp = next((pg for pg in pages if pg["file"] == pre or pg["file"].endswith("/" + pre)), None)
             if tp and tp["page_id"] != p["page_id"]:
                 _add_edge(tp["page_id"], p["page_id"], "prerrequisito")
