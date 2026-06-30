@@ -19,6 +19,7 @@ TABLES = [
     "lint_reports",
     "wiki_chat_messages",
     "notifications",
+    "page_notes",
     "srs_responses",
     "srs_states",
     "study_sessions",
@@ -46,7 +47,7 @@ def clear_tables() -> None:
                 sb.table(table).delete().neq("id", "__never__").execute()
             else:
                 sb.table(table).delete().gte(
-                    "created_at" if table != "srs_states" else "updated_at",
+                    "created_at" if table not in ("srs_states", "page_notes") else "updated_at",
                     "1900-01-01",
                 ).execute()
 

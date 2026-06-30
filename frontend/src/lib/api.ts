@@ -1,4 +1,4 @@
-import type { IngestJob, LLMProvider, ReviewItem } from '@/types'
+import type { IngestJob, LLMProvider, Plan, ReviewItem } from '@/types'
 
 const FASTAPI_URL = import.meta.env.VITE_FASTAPI_URL ?? 'http://localhost:8000'
 
@@ -42,5 +42,13 @@ export const api = {
   srs: {
     grade: (data: { deck_id: string; concept_slug: string; grade: string }) =>
       request('/srs/grade', { method: 'POST', body: JSON.stringify(data) }),
+  },
+  plan: {
+    get: (deckId: string) => request<Plan>(`/plan/${deckId}`),
+    customize: (deckId: string, instruction: string) =>
+      request<Plan>(`/plan/${deckId}/customize`, {
+        method: 'POST',
+        body: JSON.stringify({ instruction }),
+      }),
   },
 }

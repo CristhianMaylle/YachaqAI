@@ -1,6 +1,6 @@
-import { useEffect, useState, useMemo, lazy, Suspense } from 'react'
+import { useEffect, useState, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { fetchWikiPage, fetchGraph, fetchNotebook } from '@/lib/notebook-api'
+import { fetchWikiPage, fetchGraph, fetchNotebook, fetchNote, saveNote } from '@/lib/notebook-api'
 import type { WikiNode, WikiLink } from '@/types'
 
 const ForceGraph = lazy(() =>
@@ -138,6 +138,9 @@ export function Wiki() {
   const [graph, setGraph] = useState<{ nodes: WikiNode[]; edges: WikiLink[] } | null>(null)
   const [pageList, setPageList] = useState<any[]>([])
   const [showGraphOverlay, setShowGraphOverlay] = useState(true)
+  const [noteContent, setNoteContent] = useState('')
+  const [noteSaving, setNoteSaving] = useState(false)
+  const articleRef = useRef<HTMLDivElement>(null)
 
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({
     root: true,
@@ -170,7 +173,7 @@ export function Wiki() {
   useEffect(() => {
     if (!deckId) return
     fetchGraph(deckId).then(setGraph)
-  }, [deckId, relPath])
+  }, [deckId])
 
   useEffect(() => {
     if (!deckId) return
@@ -178,6 +181,32 @@ export function Wiki() {
       if (data?.pages) setPageList(data.pages)
     })
   }, [deckId])
+
+  useEffect(() => {
+    if (!deckId || !page?.page_id) return
+    fetchNote(deckId, page.page_id).then((data) => setNoteContent(data.content || ''))
+  }, [deckId, page?.page_id])
+
+  useEffect(() => {
+    if (!page?.html || !articleRef.current) return
+    import('mermaid').then(({ default: mermaid }) => {
+      mermaid.initialize({ startOnLoad: false, theme: 'dark' })
+      const blocks = articleRef.current?.querySelectorAll('code.mermaid, pre.mermaid')
+      if (blocks && blocks.length > 0) {
+        mermaid.run({ nodes: Array.from(blocks) as HTMLElement[] }).catch(() => {})
+      }
+    })
+  }, [page?.html])
+
+  async function handleSaveNote() {
+    if (!deckId || !page?.page_id) return
+    setNoteSaving(true)
+    try {
+      await saveNote(deckId, page.page_id, noteContent)
+    } finally {
+      setNoteSaving(false)
+    }
+  }
 
   /* derived data */
   const groupedPages = useMemo(() => {
@@ -235,6 +264,24 @@ export function Wiki() {
     ],
     [],
   )
+
+  /* navegacion Anterior/Siguiente dentro del mismo modulo */
+  const moduleSlug = page?.type === 'concepto' ? page?.frontmatter?.modulo : undefined
+  const moduleNav = useMemo(() => {
+    if (!moduleSlug) return null
+    const siblings = groupedPages.conceptos.filter((p: any) => p.frontmatter?.modulo === moduleSlug)
+    const idx = siblings.findIndex((p: any) => p.file === relPath)
+    if (idx === -1) return null
+    const moduleTitle = groupedPages.modulos.find((m: any) => m.page_id === moduleSlug)?.title
+      ?? moduleSlug.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+    return {
+      index: idx + 1,
+      total: siblings.length,
+      moduleTitle,
+      prev: idx > 0 ? siblings[idx - 1] : null,
+      next: idx < siblings.length - 1 ? siblings[idx + 1] : null,
+    }
+  }, [moduleSlug, groupedPages.conceptos, groupedPages.modulos, relPath])
 
   const subGraph = useMemo(() => {
     if (!graph || !page) return { nodes: [], edges: [] }
@@ -493,20 +540,40 @@ export function Wiki() {
       {/* Center: Article */}
       <div className="flex-1 overflow-y-auto bg-background p-8 relative">
         <div className="max-w-3xl mx-auto">
+          {/* Breadcrumb */}
+          <div className="mb-3 flex items-center gap-1.5 text-[11px] text-muted">
+            <span>Mazo</span>
+            {moduleNav && (
+              <>
+                <span>/</span>
+                <span>{moduleNav.moduleTitle}</span>
+              </>
+            )}
+            <span>/</span>
+            <span className="text-foreground font-medium truncate">{page.title}</span>
+          </div>
+
           {/* Action Bar */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-6 gap-3">
             <div className="flex items-center gap-2.5 text-[10px] text-muted uppercase font-bold tracking-wider">
               <span className={`w-2 h-2 rounded-full ${getSrsBadgeColor(page.estado_srs)}`} />
               <span>
                 {page.type} -- Maestria: {Math.round((page.maestria || 0) * 100)}%
               </span>
             </div>
-            <Link
-              to={`/deck/${deckId}/editor/${encoded}`}
-              className="px-3.5 py-1.5 rounded-lg border border-border bg-card text-xs font-semibold text-foreground hover:bg-primary/50 transition-colors shadow-sm"
-            >
-              Editar nota
-            </Link>
+            <div className="flex items-center gap-2">
+              {moduleNav && (
+                <span className="text-[10px] text-muted font-semibold">
+                  Concepto {moduleNav.index} de {moduleNav.total}
+                </span>
+              )}
+              <Link
+                to={`/deck/${deckId}/editor/${encoded}`}
+                className="px-3.5 py-1.5 rounded-lg border border-border bg-card text-xs font-semibold text-foreground hover:bg-primary/50 transition-colors shadow-sm"
+              >
+                Editar nota
+              </Link>
+            </div>
           </div>
 
           {/* Frontmatter Card */}
@@ -540,9 +607,55 @@ export function Wiki() {
 
           {/* Markdown Body */}
           <article
+            ref={articleRef}
             className="prose prose-invert max-w-none text-xs text-foreground leading-relaxed py-4"
             dangerouslySetInnerHTML={{ __html: page.html }}
           />
+
+          {/* Anterior / Siguiente dentro del modulo */}
+          {moduleNav && (moduleNav.prev || moduleNav.next) && (
+            <div className="mt-6 flex items-center justify-between gap-3 border-t border-border pt-4">
+              {moduleNav.prev ? (
+                <Link
+                  to={`/deck/${deckId}/wiki/${moduleNav.prev.file.split('/').map(encodeURIComponent).join('/')}`}
+                  className="flex-1 rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-medium text-foreground hover:bg-primary/50 transition-colors"
+                >
+                  ← {moduleNav.prev.title}
+                </Link>
+              ) : <div className="flex-1" />}
+              {moduleNav.next ? (
+                <Link
+                  to={`/deck/${deckId}/wiki/${moduleNav.next.file.split('/').map(encodeURIComponent).join('/')}`}
+                  className="flex-1 rounded-lg border border-border bg-card px-3.5 py-2 text-right text-xs font-medium text-foreground hover:bg-primary/50 transition-colors"
+                >
+                  {moduleNav.next.title} →
+                </Link>
+              ) : <div className="flex-1" />}
+            </div>
+          )}
+
+          {/* Mis Notas */}
+          {page.type === 'concepto' && (
+            <div className="mt-8 rounded-2xl border border-border bg-card p-5 shadow-sm">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-[10px] font-bold text-muted uppercase tracking-widest">Mis Notas</h3>
+                <button
+                  onClick={handleSaveNote}
+                  disabled={noteSaving}
+                  className="px-3 py-1 rounded-lg bg-cyan text-background text-[11px] font-semibold hover:opacity-90 disabled:opacity-50 transition-opacity"
+                >
+                  {noteSaving ? 'Guardando...' : 'Guardar nota'}
+                </button>
+              </div>
+              <textarea
+                value={noteContent}
+                onChange={(e) => setNoteContent(e.target.value)}
+                placeholder="Escribe anotaciones libres sobre este concepto..."
+                rows={4}
+                className="w-full resize-y rounded-lg border border-border bg-background p-3 text-xs text-foreground placeholder:text-muted outline-none focus:border-cyan transition-colors"
+              />
+            </div>
+          )}
 
           {/* Module Quiz CTA */}
           {page.type === 'modulo' && (

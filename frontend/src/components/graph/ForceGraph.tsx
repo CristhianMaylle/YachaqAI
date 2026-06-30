@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ForceGraphMethods } from "react-force-graph-2d";
-import type { WikiNode, WikiLink } from "@/types";
+import { SRS_COLORS, type WikiNode, type WikiLink } from "@/types";
 
 const ForceGraph2D = lazy(() => import("react-force-graph-2d"));
 
@@ -13,6 +13,7 @@ interface ForceGraphProps {
   height?: number;
   readOnly?: boolean;
   centerNodeId?: string;
+  activeModuleId?: string;
 }
 
 export function ForceGraph({
@@ -23,6 +24,7 @@ export function ForceGraph({
   height,
   readOnly = false,
   centerNodeId,
+  activeModuleId,
 }: ForceGraphProps) {
   const navigate = useNavigate();
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
@@ -51,15 +53,7 @@ export function ForceGraph({
   }, [width, height]);
 
   const getMasteryColor = useCallback((node: WikiNode) => {
-    const estado = node.estado_srs || "bloqueado";
-    switch (estado) {
-      case "dominado": return "#22c55e";
-      case "en_practica": return "#f59e0b";
-      case "critico": return "#ef4444";
-      case "en_estudio": return "#3b82f6";
-      case "bloqueado":
-      default: return "#9ca3af";
-    }
+    return SRS_COLORS[node.estado_srs || "bloqueado"] ?? SRS_COLORS.bloqueado;
   }, []);
 
   const getNodeVal = useCallback((node: WikiNode) => {
@@ -84,6 +78,16 @@ export function ForceGraph({
     });
     return map;
   }, [nodes, edges]);
+
+  const moduleBadgeIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!activeModuleId) return map;
+    nodes
+      .filter((n) => n.module === activeModuleId)
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .forEach((n, idx) => map.set(n.id, idx + 1));
+    return map;
+  }, [nodes, activeModuleId]);
 
   const activeFocusId = selectedNode?.id || hoveredNode?.id;
   const activeNeighbors = useMemo(() => {
@@ -192,13 +196,15 @@ export function ForceGraph({
             const color = getMasteryColor(n);
             const isFocused = activeFocusId === n.id;
             const isNeighbor = activeNeighbors.has(n.id);
-            const isDimmed = activeFocusId && !isFocused && !isNeighbor;
+            const badgeNumber = moduleBadgeIndex.get(n.id);
+            const isOutsideActiveModule = !!activeModuleId && badgeNumber === undefined;
+            const isDimmed = (activeFocusId && !isFocused && !isNeighbor) || isOutsideActiveModule;
 
             ctx.save();
             ctx.beginPath();
             ctx.arc(n.x ?? 0, n.y ?? 0, r, 0, 2 * Math.PI);
             if (isFocused) { ctx.shadowColor = color; ctx.shadowBlur = 12; }
-            ctx.fillStyle = isDimmed ? color + "22" : color;
+            ctx.fillStyle = isOutsideActiveModule ? color + "44" : isDimmed ? color + "22" : color;
             ctx.fill();
             ctx.restore();
 
@@ -220,6 +226,24 @@ export function ForceGraph({
               ctx.strokeStyle = "rgba(0, 198, 251, 0.15)";
               ctx.lineWidth = 1.5;
               ctx.stroke();
+            }
+
+            if (badgeNumber !== undefined) {
+              const badgeR = Math.max(5, r * 0.55);
+              const bx = (n.x ?? 0) + r * 0.7;
+              const by = (n.y ?? 0) - r * 0.7;
+              ctx.beginPath();
+              ctx.arc(bx, by, badgeR, 0, 2 * Math.PI);
+              ctx.fillStyle = "#00C6FB";
+              ctx.fill();
+              ctx.strokeStyle = "#0D1B2A";
+              ctx.lineWidth = 1.2;
+              ctx.stroke();
+              ctx.font = `700 ${Math.max(6, badgeR)}px Inter, system-ui, sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillStyle = "#0D1B2A";
+              ctx.fillText(String(badgeNumber), bx, by + 0.5);
             }
 
             const labelText = n.label;
@@ -265,6 +289,28 @@ export function ForceGraph({
               </span>
             </div>
           </div>
+          {(hoveredNode.proximo_repaso || !!hoveredNode.n_preguntas) && (
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              {hoveredNode.proximo_repaso && (
+                <div>
+                  <span className="text-muted block">Proximo repaso:</span>
+                  <span className="font-semibold text-foreground">{hoveredNode.proximo_repaso}</span>
+                </div>
+              )}
+              {!!hoveredNode.n_preguntas && (
+                <div>
+                  <span className="text-muted block">Preguntas:</span>
+                  <span className="font-semibold text-foreground">{hoveredNode.n_preguntas}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {!!hoveredNode.prerequisites?.length && (
+            <div className="text-[10px] text-muted border-t border-border border-dashed pt-1.5">
+              <span className="block text-muted/80 uppercase tracking-wider font-semibold mb-0.5">Prerrequisitos</span>
+              {hoveredNode.prerequisites.map((p) => p.title).join(', ')}
+            </div>
+          )}
           {hoveredNode.summary && (
             <div className="text-[10px] text-muted italic mt-1 line-clamp-2 border-t border-border border-dashed pt-1.5">
               {hoveredNode.summary}

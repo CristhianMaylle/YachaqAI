@@ -1531,4 +1531,44 @@ response = await gateway.generate(prompt=prompt, system=system_prompt)
 | API key invalida | El error se detecta en la primera llamada real (no al iniciar). El gateway captura la excepcion de autenticacion y devuelve HTTP 401 con `{ detail: "API key invalida para {provider}. Verifica {ENV_VAR} en .env" }` |
 | Proveedor con rate limit | El gateway captura HTTP 429 y devuelve `{ detail: "Limite de uso alcanzado en {provider}. Intenta mas tarde o cambia de modelo" }` |
 | Usuario selecciona modelo no disponible | `PUT /llm/select` devuelve 400 con el mensaje de cual variable falta |
+
+---
+
+## 14. Deuda Tecnica Pendiente: Rendimiento del Lector de Wiki
+
+> Auditoria de 2026-06-30 sobre `Wiki.tsx` / `wiki_builder.py` / `ingesta.py`,
+> a raiz de 3 bugs reportados en pruebas (indice que solo mostraba el ultimo
+> PDF, demora al abrir una nota recien generada, wikilinks rotos). Los 3 bugs
+> ya estan corregidos (ver abajo). Esta seccion documenta las mejoras de
+> **rendimiento** identificadas en la misma auditoria que quedan pendientes
+> — no son bugs, son optimizaciones para cuando los mazos crezcan (50+ notas).
+
+### 14.1 Ya corregido
+
+| # | Causa raiz | Fix |
+|:---|:---|:---|
+| 1 | `_update_index()` reconstruia `index.md` solo con los items de la ingesta actual, descartando PDFs anteriores | Ahora reconstruye desde `get_all_pages()` (estado real acumulado de Storage) en cada ingesta — `agents/ingesta.py` |
+| 2 | `_upload_text()` hacia `remove()` + `upload()` en cada escritura, dejando una ventana de 404 entre ambas llamadas | Se quito el `remove()`; `upsert: true` ya sobreescribe atomicamente — `services/wiki_builder.py` |
+| 3 | `fetchGraph` en `Wiki.tsx` dependia de `relPath`, re-descargando y re-parseando todo el grafo en cada clic | Ahora depende solo de `deckId` — `pages/deck/Wiki.tsx` |
+| 4 | El LLM a veces escribe el titulo de un concepto en `related`/`prerequisites` en vez de su slug exacto, rompiendo la resolucion del wikilink | Mapa titulo→slug (items de la ingesta + conceptos existentes) que resuelve por titulo antes de slugificar — `agents/ingesta.py` |
+
+### 14.2 Pendiente — rendimiento al abrir notas (mazos grandes)
+
+| # | Problema | Mejora propuesta |
+|:---|:---|:---|
+| 5 | `get_all_pages()` descarga cada `.md` por separado (secuencial); con 80 notas son ~80 round-trips a Storage en cada `fetchNotebook`/grafo | Paralelizar descargas (`asyncio.gather`) en `wiki_builder.py` |
+| 6 | `read_page()` ejecuta `markdown.markdown(...)` en cada lectura; el cache (`_page_cache`) guarda el `.md` crudo pero no el HTML ya renderizado | Cachear tambien el HTML resultante, invalidar en `save_page`/`_write_page_to_storage` |
+| 7 | El mini-mapa (`ForceGraph`) se monta automaticamente en cada nota si `subGraph.nodes.length > 0`, compitiendo con el render del markdown | Cargarlo solo bajo demanda (boton "Mostrar mapa" en vez de visible por defecto) |
+| 8 | El sidebar de `Wiki.tsx` reconstruye el arbol completo en cada render sin `React.memo` | Memoizar items del sidebar |
+| 9 | Cache en memoria (`_page_cache`) es global al proceso pero solo se invalida en `delete_notebook` — el comentario dice "se limpia por request" pero no es cierto | Cache persistente con invalidacion explicita (ver #11), o corregir el comentario si el comportamiento actual es intencional |
+
+### 14.3 Pendiente — estructural (mayor esfuerzo)
+
+| # | Mejora | Nota |
+|:---|:---|:---|
+| 10 | Endpoint batch `GET /deck/{id}/bulk` que devuelva `{pages, graph, stats}` en una sola llamada | Reemplazaria las 2-3 llamadas paralelas que hace `Wiki.tsx` hoy |
+| 11 | Cache persistente (SQLite/JSON) con TTL + invalidacion por `updated_at` del mazo | Reduce la dependencia de Storage en lecturas repetidas |
+| 12 | Lint automatico post-ingesta que detecte wikilinks huerfanos | Ya cubierto por el Agente LINT planificado en [Sprint 4](PLAN_SPRINTS.md) — no requiere trabajo nuevo, solo asegurarse de incluir el chequeo de referencias rotas al implementarlo |
+
+---
 | Timeout del proveedor | 30s max. Si se excede, devuelve 504 con sugerencia de usar un tier "fast" |

@@ -46,3 +46,16 @@ export async function gradeSrs(deckId: string, conceptId: string, grade: string)
     body: JSON.stringify({ conceptId, grade }),
   });
 }
+
+export async function fetchNote(deckId: string, pageId: string): Promise<{ content: string; updated_at: string | null }> {
+  const res = await fetch(`/api/notebooks/${deckId}/notes/${encodeURIComponent(pageId)}`);
+  return res.json();
+}
+
+export async function saveNote(deckId: string, pageId: string, content: string) {
+  return fetch(`/api/notebooks/${deckId}/notes/${encodeURIComponent(pageId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+}

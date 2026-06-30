@@ -1,7 +1,14 @@
 import { useEffect, useState, useMemo } from "react";
-import type { WikiNode, WikiLink } from "@/types";
+import { SRS_COLORS, type WikiNode, type WikiLink } from "@/types";
 import { ForceGraph } from "./ForceGraph";
 import { fetchGraph } from "@/lib/notebook-api";
+
+const ESTADO_BAR_ITEMS = [
+  { id: "dominado", label: "Dominados" },
+  { id: "en_practica", label: "En practica" },
+  { id: "critico", label: "Criticos" },
+  { id: "bloqueado", label: "Bloqueados" },
+] as const;
 
 export function NotebookGraph({ deckId }: { deckId: string }) {
   const [graph, setGraph] = useState<{ nodes: WikiNode[]; edges: WikiLink[] } | null>(null);
@@ -25,14 +32,13 @@ export function NotebookGraph({ deckId }: { deckId: string }) {
     return Array.from(mods);
   }, [graph]);
 
-  const filteredGraph = useMemo(() => {
+  // Solo filtra por estado de maestria (oculta nodos). El modulo activo NO
+  // oculta nodos — se le pasa a ForceGraph para que los atenue al 60% y
+  // numere los del modulo activo (Modo Modulo Activo), conservando el grafo
+  // completo visible para dar contexto.
+  const stateFilteredGraph = useMemo(() => {
     if (!graph) return { nodes: [], edges: [] };
-    const nodes = graph.nodes.filter((node) => {
-      if (selectedModule !== "todos" && node.module !== selectedModule && node.id !== selectedModule) return false;
-      const estado = node.estado_srs || "bloqueado";
-      if (!selectedStates[estado]) return false;
-      return true;
-    });
+    const nodes = graph.nodes.filter((node) => selectedStates[node.estado_srs || "bloqueado"]);
     const nodeIds = new Set(nodes.map((n) => n.id));
     const edges = graph.edges.filter((edge) => {
       const s = typeof edge.source === "object" ? (edge.source as any).id : edge.source;
@@ -40,7 +46,29 @@ export function NotebookGraph({ deckId }: { deckId: string }) {
       return nodeIds.has(s) && nodeIds.has(t);
     });
     return { nodes, edges };
-  }, [graph, selectedModule, selectedStates]);
+  }, [graph, selectedStates]);
+
+  const activeModuleNodes = useMemo(
+    () => stateFilteredGraph.nodes.filter((n) => n.module === selectedModule),
+    [stateFilteredGraph, selectedModule],
+  );
+
+  const activeModuleTitle = useMemo(() => {
+    if (selectedModule === "todos" || !graph) return null;
+    const moduleNode = graph.nodes.find((n) => n.id === selectedModule);
+    return moduleNode?.label ?? selectedModule.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }, [graph, selectedModule]);
+
+  const estadoCounts = useMemo(() => {
+    const counts: Record<string, number> = { dominado: 0, en_practica: 0, critico: 0, bloqueado: 0 };
+    stateFilteredGraph.nodes
+      .filter((n) => n.type === "concepto")
+      .forEach((n) => {
+        const estado = n.estado_srs || "bloqueado";
+        if (estado in counts) counts[estado] += 1;
+      });
+    return counts;
+  }, [stateFilteredGraph]);
 
   if (!graph) {
     return (
@@ -58,13 +86,13 @@ export function NotebookGraph({ deckId }: { deckId: string }) {
     <div className="w-full h-full relative flex flex-col md:flex-row">
       <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-border bg-card p-5 flex flex-col gap-6 flex-shrink-0 z-10">
         <div>
-          <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Filtrar por Modulo</h3>
+          <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Modulo Activo</h3>
           <select
             value={selectedModule}
             onChange={(e) => setSelectedModule(e.target.value)}
             className="w-full text-xs font-medium text-foreground bg-background border border-border rounded-lg p-2.5 outline-none focus:border-cyan transition-colors"
           >
-            <option value="todos">Todos los temas</option>
+            <option value="todos">Ninguno (exploracion libre)</option>
             {availableModules.map((mod) => (
               <option key={mod} value={mod}>{mod.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}</option>
             ))}
@@ -97,12 +125,34 @@ export function NotebookGraph({ deckId }: { deckId: string }) {
           </div>
         </div>
         <div className="mt-auto border-t border-border pt-4 text-[10px] text-muted flex flex-col gap-1">
-          <span>Nodos mostrados: {filteredGraph.nodes.length} / {graph.nodes.length}</span>
-          <span>Enlaces mostrados: {filteredGraph.edges.length} / {graph.edges.length}</span>
+          <span>Nodos visibles: {stateFilteredGraph.nodes.length} / {graph.nodes.length}</span>
+          <span>Enlaces visibles: {stateFilteredGraph.edges.length} / {graph.edges.length}</span>
         </div>
       </div>
-      <div className="flex-1 relative min-h-[400px] md:min-h-0">
-        <ForceGraph deckId={deckId} nodes={filteredGraph.nodes} edges={filteredGraph.edges} />
+      <div className="flex-1 relative min-h-[400px] md:min-h-0 flex flex-col">
+        {activeModuleTitle && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 rounded-full bg-card/95 backdrop-blur border border-cyan/30 px-4 py-1.5 text-xs font-semibold text-foreground shadow-lg">
+            Modulo: <span className="text-cyan">{activeModuleTitle}</span>
+            <span className="text-muted font-normal"> — {activeModuleNodes.length} nodos</span>
+          </div>
+        )}
+        <div className="flex-1 relative">
+          <ForceGraph
+            deckId={deckId}
+            nodes={stateFilteredGraph.nodes}
+            edges={stateFilteredGraph.edges}
+            activeModuleId={selectedModule !== "todos" ? selectedModule : undefined}
+          />
+        </div>
+        <div className="flex items-center justify-center gap-4 border-t border-border bg-card/80 backdrop-blur px-4 py-2 text-[11px] font-medium">
+          {ESTADO_BAR_ITEMS.map((item) => (
+            <span key={item.id} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: SRS_COLORS[item.id] }} />
+              <span className="text-muted">{item.label}:</span>
+              <span className="text-foreground font-semibold">{estadoCounts[item.id]}</span>
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );

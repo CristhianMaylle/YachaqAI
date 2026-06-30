@@ -9,6 +9,11 @@ export type NotebookMeta = {
 
 export type WikiNodeType = 'concepto' | 'entidad' | 'modulo' | 'fuente' | 'pregunta' | 'notebook' | 'overview';
 
+export type WikiNodePrerequisite = {
+  id: string;
+  title: string;
+};
+
 export type WikiNode = {
   id: string;
   label: string;
@@ -20,6 +25,9 @@ export type WikiNode = {
   summary?: string;
   module?: string;
   category?: string;
+  proximo_repaso?: string | null;
+  n_preguntas?: number;
+  prerequisites?: WikiNodePrerequisite[];
 };
 
 export type WikiLink = {
@@ -43,18 +51,57 @@ export type WikiPage = {
   last_updated: string;
 };
 
+// Fuente unica de verdad para los colores semaforo SRS — debe coincidir
+// con las variables --color-srs-* en src/styles/globals.css.
+export const SRS_COLORS: Record<string, string> = {
+  dominado: '#4CAF50',
+  en_practica: '#FFC107',
+  critico: '#F44336',
+  bloqueado: '#9E9E9E',
+  en_estudio: '#00C6FB',
+};
+
 export function colorForEstado(estado: string) {
-  switch (estado) {
-    case 'dominado':
-      return '#22c55e';
-    case 'en_practica':
-      return '#f59e0b';
-    case 'critico':
-      return '#ef4444';
-    case 'bloqueado':
-    default:
-      return '#9ca3af';
-  }
+  return SRS_COLORS[estado] ?? SRS_COLORS.bloqueado;
+}
+
+export type PlanModuleEstado =
+  | 'pendiente'
+  | 'en_progreso'
+  | 'completado'
+  | 'repaso_pendiente'
+  | 'degradado'
+  | 'bloqueado';
+
+// Colores para los 6 estados del Plan Visual (P5.0). Reusa SRS_COLORS donde
+// el significado coincide y agrega los 2 estados propios del plan.
+export const PLAN_COLORS: Record<PlanModuleEstado, string> = {
+  pendiente: SRS_COLORS.bloqueado,
+  en_progreso: SRS_COLORS.en_estudio,
+  completado: SRS_COLORS.dominado,
+  repaso_pendiente: SRS_COLORS.en_practica,
+  degradado: '#FF7043',
+  bloqueado: '#5C6B7A',
+};
+
+export interface PlanModule {
+  id: string;
+  title: string;
+  estado: PlanModuleEstado;
+  retencion_promedio: number;
+  n_conceptos: number;
+}
+
+export interface PlanEdge {
+  source: string;
+  target: string;
+}
+
+export interface Plan {
+  modules: PlanModule[];
+  edges: PlanEdge[];
+  customization_applied?: boolean;
+  instruction?: string;
 }
 
 export type SrsEstado = 'bloqueado' | 'en_estudio' | 'critico' | 'en_practica' | 'dominado';

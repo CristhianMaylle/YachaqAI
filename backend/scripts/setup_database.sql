@@ -164,6 +164,17 @@ CREATE TABLE IF NOT EXISTS lint_reports (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- 11. PAGE_NOTES (anotaciones libres del usuario por nota de wiki, Sprint 2)
+CREATE TABLE IF NOT EXISTS page_notes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  deck_id TEXT REFERENCES decks(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  content TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(deck_id, page_id, user_id)
+);
+
 
 -- ============================================================
 -- ROW LEVEL SECURITY
@@ -179,6 +190,7 @@ ALTER TABLE srs_responses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE wiki_chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lint_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE page_notes ENABLE ROW LEVEL SECURITY;
 
 -- Politicas: DROP + CREATE (PostgreSQL no soporta IF NOT EXISTS en policies)
 
@@ -206,6 +218,9 @@ CREATE POLICY "notifications_own" ON notifications FOR ALL USING (auth.uid() = u
 DROP POLICY IF EXISTS "chat_own" ON wiki_chat_messages;
 CREATE POLICY "chat_own" ON wiki_chat_messages FOR ALL USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "notes_own" ON page_notes;
+CREATE POLICY "notes_own" ON page_notes FOR ALL USING (auth.uid() = user_id);
+
 -- Politicas abiertas temporales (Sprints 1-4 sin auth)
 DROP POLICY IF EXISTS "ingest_open" ON ingest_jobs;
 CREATE POLICY "ingest_open" ON ingest_jobs FOR ALL USING (true);
@@ -230,6 +245,9 @@ CREATE POLICY "responses_open" ON srs_responses FOR ALL USING (true);
 
 DROP POLICY IF EXISTS "schedule_open" ON schedule_slots;
 CREATE POLICY "schedule_open" ON schedule_slots FOR ALL USING (true);
+
+DROP POLICY IF EXISTS "notes_open" ON page_notes;
+CREATE POLICY "notes_open" ON page_notes FOR ALL USING (true);
 
 
 -- ============================================================
@@ -286,3 +304,4 @@ CREATE INDEX IF NOT EXISTS idx_schedule_deck ON schedule_slots(deck_id);
 CREATE INDEX IF NOT EXISTS idx_schedule_date ON schedule_slots(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_chat_deck ON wiki_chat_messages(deck_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_lint_deck ON lint_reports(deck_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notes_deck_page ON page_notes(deck_id, page_id);

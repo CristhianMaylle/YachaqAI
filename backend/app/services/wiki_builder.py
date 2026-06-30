@@ -52,12 +52,11 @@ def _storage_path(deck_id: str, rel_path: str) -> str:
 
 
 def _upload_text(bucket: str, storage_path: str, content: str) -> None:
+    # upsert=true ya sobreescribe atomicamente — el remove() previo dejaba
+    # una ventana donde el archivo "no existia" entre el delete y el upload,
+    # causando 404 intermitentes al navegar justo despues de generar la wiki.
     sb = get_supabase()
     data = content.encode("utf-8")
-    try:
-        sb.storage.from_(bucket).remove([storage_path])
-    except Exception:
-        pass
     sb.storage.from_(bucket).upload(
         storage_path, data,
         file_options={"content-type": "text/markdown; charset=utf-8", "upsert": "true"},
@@ -361,12 +360,16 @@ def build_graph(deck_id: str) -> dict:
             p["frontmatter"].get("modulo", "general") if t == "concepto"
             else {"entidad": "Entidades", "fuente": "Fuentes", "modulo": "Módulos", "pregunta": "SRS"}.get(t, "general")
         )
+        proximo_repaso = p["frontmatter"].get("proximo_repaso")
         node_map[p["page_id"]] = {
             "id": p["page_id"], "label": p["title"], "type": t, "group": group,
             "maestria": p["maestria"], "estado_srs": p["estado_srs"], "file": p["file"],
             "summary": p["frontmatter"].get("resumen", ""),
             "module": p["frontmatter"].get("modulo"),
             "category": group,
+            "proximo_repaso": proximo_repaso if isinstance(proximo_repaso, str) else None,
+            "n_preguntas": 0,
+            "prerequisites": [],
         }
 
     edge_map: dict[str, dict] = {}
@@ -402,7 +405,132 @@ def build_graph(deck_id: str) -> dict:
             if resolved and resolved != pid:
                 _add_edge(pid, resolved, "pregunta_sobre")
 
+    # Enriquecimiento para el tooltip del grafo: N preguntas asociadas y
+    # prerrequisitos resueltos a {id, title} (no solo el slug crudo).
+    for edge in edge_map.values():
+        if edge["type"] == "pregunta_sobre" and edge["target"] in node_map:
+            node_map[edge["target"]]["n_preguntas"] += 1
+        elif edge["type"] == "prerrequisito" and edge["target"] in node_map and edge["source"] in node_map:
+            node_map[edge["target"]]["prerequisites"].append(
+                {"id": edge["source"], "title": node_map[edge["source"]]["label"]}
+            )
+
     return {"nodes": list(node_map.values()), "edges": list(edge_map.values())}
+
+
+# --- Plan de estudio ---
+
+def build_plan(deck_id: str) -> dict:
+    """Modulos ordenados topologicamente segun los prerrequisitos reales
+    (a nivel de concepto, agregados al modulo dueno de cada concepto), con
+    estado, retencion promedio y conteo de conceptos por modulo.
+
+    El campo frontmatter "orden" de cada modulo (asignado por el LLM en la
+    ingesta) es solo un criterio de desempate, no la fuente de verdad del
+    orden — el orden real se deriva del grafo de prerrequisitos.
+    """
+    pages = get_all_pages(deck_id)
+    modules = {p["page_id"]: p for p in pages if p["type"] == "modulo"}
+    concepts = [p for p in pages if p["type"] == "concepto"]
+
+    concepts_by_module: dict[str, list[dict]] = {mid: [] for mid in modules}
+    for c in concepts:
+        mid = c["frontmatter"].get("modulo")
+        if mid in concepts_by_module:
+            concepts_by_module[mid].append(c)
+
+    concept_owner = {
+        c["page_id"]: mid for mid, cs in concepts_by_module.items() for c in cs
+    }
+
+    # Aristas modulo->modulo agregadas desde prerrequisitos de concepto
+    module_edges: set[tuple[str, str]] = set()
+    for c in concepts:
+        mid = c["frontmatter"].get("modulo")
+        if mid not in modules:
+            continue
+        for pre in (c["frontmatter"].get("prerrequisitos") or []):
+            if not isinstance(pre, str):
+                continue
+            owner = concept_owner.get(pre)
+            if owner and owner != mid:
+                module_edges.add((owner, mid))
+
+    def _tiebreak(mid: str) -> tuple:
+        m = modules[mid]
+        orden = m["frontmatter"].get("orden", 0)
+        return (orden if isinstance(orden, (int, float)) else 0, m["title"])
+
+    in_degree = {mid: 0 for mid in modules}
+    adj: dict[str, list[str]] = {mid: [] for mid in modules}
+    prereq_of: dict[str, set[str]] = {mid: set() for mid in modules}
+    for src, tgt in module_edges:
+        adj[src].append(tgt)
+        in_degree[tgt] += 1
+        prereq_of[tgt].add(src)
+
+    # Kahn's algorithm con desempate estable por "orden" y titulo
+    remaining = dict(in_degree)
+    queue = [mid for mid, d in remaining.items() if d == 0]
+    ordered: list[str] = []
+    while queue:
+        queue.sort(key=_tiebreak)
+        mid = queue.pop(0)
+        ordered.append(mid)
+        for nxt in adj[mid]:
+            remaining[nxt] -= 1
+            if remaining[nxt] == 0:
+                queue.append(nxt)
+
+    # Si hay un ciclo, los modulos restantes se anexan por desempate sin
+    # bloquear el plan con un error duro.
+    if len(ordered) < len(modules):
+        leftover = sorted((mid for mid in modules if mid not in ordered), key=_tiebreak)
+        ordered.extend(leftover)
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    def _estado(cs: list[dict], prereqs_done: bool) -> str:
+        if not prereqs_done:
+            return "bloqueado"
+        if not cs:
+            return "pendiente"
+        estados = [c["estado_srs"] for c in cs]
+        has_dominado = "dominado" in estados
+        has_critico = "critico" in estados
+        if has_dominado and has_critico:
+            return "degradado"
+        if all(e == "dominado" for e in estados):
+            overdue = any(
+                isinstance(c["frontmatter"].get("proximo_repaso"), str)
+                and c["frontmatter"]["proximo_repaso"] < today
+                for c in cs
+            )
+            return "repaso_pendiente" if overdue else "completado"
+        if any(e != "bloqueado" for e in estados):
+            return "en_progreso"
+        return "pendiente"
+
+    result_modules = []
+    completed_set: set[str] = set()
+    for mid in ordered:
+        cs = concepts_by_module.get(mid, [])
+        prereqs_done = prereq_of[mid].issubset(completed_set)
+        estado = _estado(cs, prereqs_done)
+        if estado in ("completado", "degradado", "repaso_pendiente"):
+            completed_set.add(mid)
+        retencion = sum(c["maestria"] for c in cs) / len(cs) if cs else 0.0
+        m = modules[mid]
+        result_modules.append({
+            "id": mid,
+            "title": m["title"],
+            "estado": estado,
+            "retencion_promedio": round(retencion, 2),
+            "n_conceptos": len(cs),
+        })
+
+    edges = [{"source": s, "target": t} for s, t in module_edges]
+    return {"modules": result_modules, "edges": edges}
 
 
 # --- Stats ---

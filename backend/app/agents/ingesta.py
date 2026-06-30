@@ -313,19 +313,37 @@ async def run_ingesta_pipeline(
             on_progress=lambda pct, stage: update("analyzing", pct, stage),
         )
 
+        # Mapa titulo->slug (items de esta ingesta + conceptos existentes) para
+        # resolver referencias donde el LLM escribio el titulo en vez del slug
+        # en prerequisites/related/module — causa comun de wikilinks rotos
+        # aunque el concepto referenciado si exista.
+        title_to_slug: dict[str, str] = {}
+        for c in existing_concepts:
+            if c.get("title") and c.get("slug"):
+                title_to_slug[c["title"].strip().lower()] = c["slug"]
+        for i in plan.get("items", []):
+            if i.get("title") and i.get("slug"):
+                title_to_slug[i["title"].strip().lower()] = i["slug"]
+        for m in plan.get("modules", []):
+            if m.get("title") and m.get("slug"):
+                title_to_slug[m["title"].strip().lower()] = m["slug"]
+
+        def _resolve_ref(ref: str) -> str:
+            return _safe_slug(title_to_slug.get(ref.strip().lower(), ref))
+
         # Sanitizar slugs y enriquecer items
         for item in plan.get("items", []):
             item["slug"] = _safe_slug(item.get("slug", item.get("title", "unknown")))
             item.setdefault("accepted", True)
             item.setdefault("conflict_detail", None)
-            item["prerequisites"] = [_safe_slug(p) for p in (item.get("prerequisites") or [])]
-            item["related"] = [_safe_slug(r) for r in (item.get("related") or [])]
-            if item.get("module"):
-                item["module"] = _safe_slug(item["module"])
+            item["prerequisites"] = [_resolve_ref(p) for p in (item.get("prerequisites") or []) if isinstance(p, str)]
+            item["related"] = [_resolve_ref(r) for r in (item.get("related") or []) if isinstance(r, str)]
+            if isinstance(item.get("module"), str):
+                item["module"] = _resolve_ref(item["module"])
             item.setdefault("summary", "")
         for mod in plan.get("modules", []):
             mod["slug"] = _safe_slug(mod.get("slug", mod.get("title", "unknown")))
-            mod["concepts"] = [_safe_slug(c) for c in (mod.get("concepts") or [])]
+            mod["concepts"] = [_resolve_ref(c) for c in (mod.get("concepts") or []) if isinstance(c, str)]
 
         # Algunos modelos (ej. DeepSeek) no duplican los modulos dentro de
         # "items" con type="modulo" como pide el prompt, sino que solo los
@@ -427,7 +445,7 @@ async def run_generation_after_review(
 
         # 6. Actualizar index y log
         update("generating", 97, "Actualizando indice")
-        _update_index(deck_id, approved_items, source_name, today)
+        _update_index(deck_id, today)
         _update_log(deck_id, source_name, len(concepts), len(entities), len(modules), today)
 
         # 7. Actualizar YACHAQ.md
@@ -579,41 +597,50 @@ def _write_module(
     _write_page_to_storage(deck_id, f"5. modulos/{mod['slug']}.md", fm, body)
 
 
-def _update_index(
-    deck_id: str, items: list[dict], source_name: str, today: str,
-) -> None:
-    concepts = [i for i in items if i["type"] == "concepto"]
-    entities = [i for i in items if i["type"] == "entidad"]
-    modules = [i for i in items if i["type"] == "modulo"]
+def _update_index(deck_id: str, today: str) -> None:
+    """Reconstruye index.md desde el estado real de Storage (get_all_pages),
+    no solo desde los items de la ingesta actual. Asi el indice acumula
+    entre multiples PDFs en vez de reemplazar lo generado por ingestas
+    anteriores (era la causa de que solo el ultimo PDF subido apareciera
+    en la wiki)."""
+    all_pages = get_all_pages(deck_id)
+    modules = sorted((p for p in all_pages if p["type"] == "modulo"), key=lambda p: p["title"])
+    concepts = sorted((p for p in all_pages if p["type"] == "concepto"), key=lambda p: p["title"])
+    entities = sorted((p for p in all_pages if p["type"] == "entidad"), key=lambda p: p["title"])
+    fuentes = sorted((p for p in all_pages if p["type"] == "fuente"), key=lambda p: p["title"])
 
     sections = [f"# Indice del Notebook\n\nActualizado: {today}\n"]
 
     if modules:
         sections.append("## Modulos\n")
         for m in modules:
-            sections.append(f"- [[5. modulos/{m['slug']}.md|{m['title']}]]")
+            sections.append(f"- [[{m['file']}|{m['title']}]]")
 
     if concepts:
         sections.append("\n## Conceptos\n")
         for c in concepts:
-            sections.append(f"- [[2. conceptos/{c['slug']}.md|{c['title']}]] — {c.get('summary', '')}")
+            resumen = c["frontmatter"].get("resumen", "")
+            sections.append(f"- [[{c['file']}|{c['title']}]] — {resumen}")
 
     if entities:
         sections.append("\n## Entidades\n")
         for e in entities:
-            sections.append(f"- [[3. entidades/{e['slug']}.md|{e['title']}]]")
+            sections.append(f"- [[{e['file']}|{e['title']}]]")
 
-    sections.append(f"\n## Fuentes\n\n- [[1. fuentes_transformadas/{source_name.lower().removesuffix('.pdf').replace(' ', '-')}|{source_name}]]")
+    if fuentes:
+        sections.append("\n## Fuentes\n")
+        for f in fuentes:
+            sections.append(f"- [[{f['file']}|{f['title']}]]")
 
     fm = {
         "id": f"notebook-{deck_id}",
         "tipo": "notebook",
         "titulo": deck_id,
         "actualizado": today,
-        "modulos": [m["slug"] for m in modules],
-        "conceptos": [c["slug"] for c in concepts],
-        "entidades": [e["slug"] for e in entities],
-        "fuentes": [source_name],
+        "modulos": [m["page_id"] for m in modules],
+        "conceptos": [c["page_id"] for c in concepts],
+        "entidades": [e["page_id"] for e in entities],
+        "fuentes": [f["title"] for f in fuentes],
     }
     _write_page_to_storage(deck_id, "index.md", fm, "\n".join(sections))
 

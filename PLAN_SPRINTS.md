@@ -51,7 +51,7 @@ Sprint 2 (Grafo + Lectura) ──> Sprint 3 (Estudio + SRS)
 |:---|:---|:---|:---|
 | 1 | **Inicializar FastAPI** | Python 3.12, estructura de proyecto, CORS para Next.js, modelo de Mazo (id, name, created_at) | -- |
 | 2 | **Upload PDF** | Recibir archivo via multipart, guardar en filesystem (`data/notebooks/{id}/raw/`), validar tipo y tamano (max 100MB) | `POST /ingest/pdf` |
-| 3 | **Upload URL** | Recibir URL, extraer contenido web (texto plano), guardar como fuente | `POST /ingest/url` |
+| 3 | ~~**Upload URL**~~ | **Despriorizado para el MVP actual.** Recibir URL, extraer contenido web (texto plano), guardar como fuente. El pipeline de analisis/generacion ya es agnostico a la fuente (recibe `raw_text`), por lo que se puede agregar despues sin tocarlo — solo falta el endpoint y la extraccion web | `POST /ingest/url` (no implementado) |
 | 4 | **Pipeline de ingesta completo** | El corazon del sistema. Secuencia: | -- |
 | | 4a. Extraccion de texto | LlamaParse extrae texto estructurado del PDF. Fallback: Tesseract OCR si < 100 chars | -- |
 | | 4b. Agente de Ingesta (Gemini 2.5 Flash) | Prompt al LLM con el texto extraido + esquema YACHAQ.md. El agente identifica: conceptos, entidades, relaciones, prerrequisitos. Genera archivos .md con frontmatter YAML | -- |
@@ -79,7 +79,7 @@ pip install llama-parse google-generativeai pytesseract pyyaml
 | 1 | **Dark mode global** | Cambiar CSS variables: fondo `#0D1B2A`, cards `#1A2E45`, primario `#1E3A5F`, cyan `#00C6FB`, violeta `#534AB7`. Clase `dark` por defecto | Toda la app |
 | 2 | **Paleta semaforo** | Configurar colores exactos: verde `#4CAF50`, amarillo `#FFC107`, rojo `#F44336`, gris `#9E9E9E` | Toda la app |
 | 3 | **Instalar Zustand** | Store global: `useNotebookStore` (mazo actual, estado de ingesta) | -- |
-| 4 | **P3.2 Upload real** | Drop zone con validacion (solo PDF, max 100MB, rechazo con shake). Campo URL. Conectar a `POST /ingest/pdf` y `POST /ingest/url` reales. Barra progreso 7 etapas con polling a `/ingest/status/{jobId}`. Resultado: banner verde + estadisticas reales (N conceptos, N entidades, N modulos) | P3.2 |
+| 4 | **P3.2 Upload real** | Drop zone con validacion (solo PDF, max 100MB, rechazo con shake). ~~Campo URL~~ (ver nota de despriorizacion arriba). Conectar a `POST /ingest/process` real. Barra progreso 7 etapas con polling a `/ingest/status/{jobId}`. Resultado: banner verde + estadisticas reales (N conceptos, N entidades, N modulos) | P3.2 |
 | 5 | **P3.1 Gestion Documentos** | Lista de cards por documento: icono tipo (FileText naranja PDF, Link cyan URL), nombre, fecha, estado (Loader2/CheckCircle2/AlertCircle), estadisticas. Boton "+ Agregar material" | P3.1 |
 | 6 | **Eliminar seed hardcodeado** | Reemplazar `seedRedesNotebook()` por llamada real al backend FastAPI. Eliminar `lib/seed-networking.ts` como fuente de datos | -- |
 | 7 | **Eliminar codigo muerto** | Borrar `lib/data.ts`, `components/TopNav.tsx`, `components/Toast.tsx` (identificados en EVALUACION como dead code) | -- |

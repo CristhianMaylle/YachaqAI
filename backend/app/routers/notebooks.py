@@ -1,10 +1,13 @@
 """Routers CRUD de notebooks — migrado desde app/api/notebooks de Next.js.
 
-Estos endpoints manejan datos del filesystem (.md),
-NO necesitan Supabase.
+La mayoria de estos endpoints manejan datos del filesystem (.md) y NO
+necesitan Supabase Postgres. La excepcion son las notas libres del usuario
+("Mis Notas", Sprint 2), que viven en la tabla page_notes ya que no deben
+mezclarse con el .md generado por el LLM.
 """
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from app.dependencies import get_supabase
 from app.services.wiki_builder import (
     list_notebooks,
     notebook_exists,
@@ -117,6 +120,58 @@ async def save_wiki_page(notebook_id: str, path: str, request: Request):
     return {"success": True}
 
 
+# --- GET /notebooks/{notebook_id}/notes/{page_id} ---
+@router.get("/{notebook_id}/notes/{page_id}")
+async def get_note(notebook_id: str, page_id: str):
+    if not notebook_exists(notebook_id):
+        raise HTTPException(404, "Cuaderno no encontrado")
+    sb = get_supabase()
+    result = (
+        sb.table("page_notes")
+        .select("content,updated_at")
+        .eq("deck_id", notebook_id)
+        .eq("page_id", page_id)
+        .is_("user_id", "null")
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0]
+    return {"content": "", "updated_at": None}
+
+
+# --- PUT /notebooks/{notebook_id}/notes/{page_id} ---
+@router.put("/{notebook_id}/notes/{page_id}")
+async def save_note(notebook_id: str, page_id: str, request: Request):
+    if not notebook_exists(notebook_id):
+        raise HTTPException(404, "Cuaderno no encontrado")
+    body = await request.json()
+    content = body.get("content", "")
+
+    from datetime import datetime
+
+    sb = get_supabase()
+    existing = (
+        sb.table("page_notes")
+        .select("id")
+        .eq("deck_id", notebook_id)
+        .eq("page_id", page_id)
+        .is_("user_id", "null")
+        .limit(1)
+        .execute()
+    )
+    now = datetime.utcnow().isoformat() + "Z"
+    if existing.data:
+        sb.table("page_notes").update(
+            {"content": content, "updated_at": now}
+        ).eq("id", existing.data[0]["id"]).execute()
+    else:
+        sb.table("page_notes").insert({
+            "deck_id": notebook_id, "page_id": page_id, "content": content, "updated_at": now,
+        }).execute()
+    return {"success": True}
+
+
 # --- POST /notebooks/{notebook_id}/srs ---
 @router.post("/{notebook_id}/srs")
 async def grade_srs(notebook_id: str, request: Request):
@@ -157,13 +212,3 @@ async def grade_srs(notebook_id: str, request: Request):
         "success": True, "conceptId": concept_id, "title": concept["title"],
         "newEstadoSrs": estado, "newMaestria": maestria, "nextReview": next_review,
     }
-
-
-# --- POST /notebooks/{notebook_id}/ingest ---
-@router.post("/{notebook_id}/ingest")
-async def ingest_seed(notebook_id: str):
-    """Placeholder: en el prototipo actual carga seed data hardcodeada."""
-    if not notebook_exists(notebook_id):
-        raise HTTPException(404, "Cuaderno no encontrado")
-    graph = build_graph(notebook_id)
-    return {"success": True, "notebookId": notebook_id, "graph": graph}
