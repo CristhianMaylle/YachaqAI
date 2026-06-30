@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Upload as UploadIcon, FileText, X, AlertCircle } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useDeckStore } from '@/stores/deck.store'
@@ -24,10 +24,9 @@ const STAGES_STEP2 = [
 ]
 
 export function Upload() {
-  const { deckId: routeDeckId } = useParams<{ deckId: string }>()
+  const { deckId } = useParams<{ deckId: string }>()
   const navigate = useNavigate()
   const { addIngestJob, updateIngestJob } = useDeckStore()
-  const [deckId, setDeckId] = useState(routeDeckId ?? 'new')
 
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -116,15 +115,12 @@ export function Upload() {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('deck_id', deckId)
-      formData.append('deck_name', deckId)
 
       const result = await api.ingest.process(formData)
-      const realDeckId = result.deck_id || deckId
-      setDeckId(realDeckId)
       setJobId(result.job_id)
       addIngestJob({
         id: result.job_id,
-        deck_id: realDeckId,
+        deck_id: deckId,
         source_type: 'pdf',
         source_name: file.name,
         storage_path: null,
@@ -169,6 +165,26 @@ export function Upload() {
     setFile(null)
     setReviewItems([])
     setJobStatus({})
+  }
+
+  if (!deckId || deckId === 'new') {
+    return (
+      <div className="mx-auto max-w-2xl p-8">
+        <div className="flex flex-col items-center rounded-xl bg-card p-10 text-center">
+          <AlertCircle size={40} className="text-srs-practica" />
+          <h2 className="mt-4 font-heading text-xl font-semibold">Primero crea un mazo</h2>
+          <p className="mt-2 text-muted">
+            Necesitas crear o seleccionar un mazo antes de subir material.
+          </p>
+          <Link
+            to="/dashboard"
+            className="mt-6 inline-flex items-center gap-2 rounded-lg bg-cyan px-6 py-3 font-semibold text-background transition hover:opacity-90"
+          >
+            Ir a Mis Mazos
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return (

@@ -12,11 +12,13 @@ from app.services.wiki_builder import (
     get_notebook_stats,
     get_all_pages,
     create_notebook,
+    register_deck,
     delete_notebook,
     build_graph,
     read_page,
     save_page,
     parse_frontmatter,
+    _slugify,
 )
 
 router = APIRouter()
@@ -39,9 +41,18 @@ async def list_all(include: str | None = None):
 async def create(request: Request):
     body = await request.json()
     name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "Nombre requerido")
-    return create_notebook(name)
+    if len(name) < 3:
+        raise HTTPException(400, "El nombre debe tener al menos 3 caracteres")
+
+    slug = _slugify(name)
+    if not slug:
+        raise HTTPException(400, "Nombre invalido")
+    if notebook_exists(slug):
+        raise HTTPException(409, "Ya existe un mazo con ese nombre. Elige otro.")
+
+    meta = create_notebook(name)
+    register_deck(meta["id"], name)
+    return meta
 
 
 # --- GET /notebooks/{notebook_id} ---

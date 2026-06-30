@@ -545,6 +545,73 @@ politicas basadas en `auth.uid()`.
 **Indices:** 16 indices para las consultas mas frecuentes (SRS due, sessions por deck,
 notifications unread, chat history, etc.)
 
+### 10.1 Decision Critica: `decks.id` es TEXT, no UUID
+
+> **Por que importa para sprints futuros:** esta decision afecta el tipo de
+> dato de `deck_id` en CADA tabla que lo referencia (`schedule_slots`,
+> `study_sessions`, `srs_states`, `srs_responses`, `notifications`,
+> `wiki_chat_messages`, `lint_reports`, `ingest_jobs`). Cualquier sprint
+> que agregue una tabla nueva con `deck_id` debe usar `TEXT`, no `UUID`.
+
+**Origen del problema (encontrado durante pruebas de Sprint 1):**
+El diseño original (sección 10, primera version) definia `decks.id UUID
+DEFAULT gen_random_uuid()`. Pero el resto del sistema —Supabase Storage
+(`wikis/{deck_id}/`), `ingest_jobs.deck_id`, las rutas del frontend
+(`/deck/:deckId/...`)— usa **slugs de texto** (`"redes-de-computadoras"`)
+generados por `_slugify()` en `wiki_builder.py`. El backend nunca insertaba
+una fila en `decks` (solo creaba el notebook en Storage), por lo que el
+Dashboard nunca mostraba los mazos creados.
+
+**Decision:** `decks.id` es `TEXT PRIMARY KEY`, asignado explicitamente
+por el backend al slug del deck (mismo valor usado en Storage e
+`ingest_jobs.deck_id`). NO se usa `gen_random_uuid()`.
+
+```python
+# backend/app/routers/ingest.py — process_pdf()
+if deck_id == "new":
+    deck_id = _slugify(deck_name) if deck_name else str(uuid4())[:8]
+
+if is_new_deck:
+    supabase.table("decks").insert({
+        "id": deck_id,             # TEXT, no UUID
+        "name": deck_name or deck_id,
+        "wiki_path": f"{deck_id}/",
+    }).execute()
+```
+
+**Tablas con `deck_id TEXT` (no `UUID`):**
+
+| Tabla | Tipo deck_id | FK a decks(id)? |
+|:---|:---|:---|
+| `ingest_jobs` | TEXT | No (deliberado, permite creacion flexible) |
+| `decks` | TEXT (es el `id` mismo) | -- |
+| `schedule_slots` | TEXT | Si |
+| `study_sessions` | TEXT | Si |
+| `srs_states` | TEXT | Si |
+| `srs_responses` | TEXT | Si |
+| `notifications` | TEXT | No (deliberado) |
+| `wiki_chat_messages` | TEXT | No (deliberado) |
+| `lint_reports` | TEXT | No (deliberado) |
+
+**Impacto en sprints futuros:**
+
+| Sprint | Endpoint/Feature afectado | Que verificar |
+|:---|:---|:---|
+| **S2** | `GET /deck/{deckId}/graph`, `GET /deck/{deckId}/plan` | `deckId` en la ruta ya es el slug TEXT correcto, sin conversion |
+| **S3** | `POST /sessions/start`, `POST /srs/response`, `GET /srs/due` | Al insertar en `study_sessions`/`srs_states`/`srs_responses`, usar el slug TEXT tal cual llega de la URL — NO intentar castear a UUID |
+| **S4** | `GET /dashboard/metrics` (agregacion por usuario) | Debe hacer JOIN `decks.user_id = auth.uid()` y luego filtrar otras tablas por `deck_id IN (SELECT id FROM decks WHERE ...)` — el tipo TEXT debe coincidir en ambos lados del IN |
+| **S4** | `POST /deck/{deckId}/lint`, `GET /deck/{deckId}/graph/communities` | `lint_reports.deck_id` y cualquier tabla nueva debe declararse TEXT |
+| **S5** | Middleware JWT + `decks.user_id` | Mazos creados en Sprints 1-4 (durante desarrollo sin auth) tendran `user_id = NULL`. Al activar auth, decidir: (a) asignarlos a un usuario admin/seed, o (b) requerir que el usuario los re-cree. Las policies RLS abiertas (`*_open`, `USING(true)`) deben eliminarse explicitamente en Sprint 5 |
+| **S5** | `POST /user/export` (export ZIP) | El nombre del ZIP/carpeta puede usar `deck_id` (slug legible) directamente, ventaja sobre UUID |
+
+**Migraciones aplicadas** (`backend/scripts/`):
+- `migrate_deck_id_to_text.sql` — primer intento (parcial, bloqueado por RLS)
+- `migrate_deck_id_to_text_2.sql` — completa el cambio: quita policies que referencian las columnas, altera tipos, recrea policies
+
+Si se clona el repo desde cero usando `setup_database.sql` (ya actualizado),
+estas migraciones NO son necesarias — el esquema ya nace correcto. Solo
+aplican a bases de datos creadas antes de esta correccion.
+
 ---
 
 ## 11. Resumen Visual

@@ -209,9 +209,10 @@ async def run_ingesta_pipeline(
             except Exception:
                 pass
 
+        max_chars = 30_000 if gateway.get_active().get("provider") == "groq" else 80_000
         prompt = ANALYSIS_USER.format(
             source_name=source_name,
-            text=raw_text[:80_000],
+            text=raw_text[:max_chars],
             existing_concepts=json.dumps(existing_concepts, ensure_ascii=False) if existing_concepts else "Ninguno (wiki vacia)",
         )
 
@@ -362,7 +363,7 @@ async def _generate_concept(
         f"Prerrequisitos: {prereq_titles or 'Ninguno'}\n"
         f"Relacionados: {related_titles or 'Ninguno'}\n"
         f"Modulo: {concept.get('module', 'general')}\n\n"
-        f"Texto fuente relevante (extracto):\n{raw_text[:15_000]}"
+        f"Texto fuente relevante (extracto):\n{raw_text[:6_000]}"
     )
 
     sys = GENERATION_SYSTEM.replace("{today}", today).replace("{source_name}", source_name)
@@ -400,7 +401,7 @@ async def _generate_entity(
         f'Genera una pagina wiki para la entidad "{entity["title"]}".\n\n'
         f"Resumen: {entity.get('summary', '')}\n"
         f"Relacionados: {', '.join(entity.get('related', []))}\n\n"
-        f"Texto fuente relevante (extracto):\n{raw_text[:10_000]}"
+        f"Texto fuente relevante (extracto):\n{raw_text[:4_000]}"
     )
 
     sys = GENERATION_SYSTEM.replace("{today}", today).replace("{source_name}", source_name)

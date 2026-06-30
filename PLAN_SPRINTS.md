@@ -153,6 +153,10 @@ npm uninstall react-force-graph-2d marked
 
 ## Sprint 3 -- ESTUDIO + SRS: Cuestionarios, Evaluacion IA y Repeticion Espaciada
 
+> **Nota de esquema (ver ARQUITECTURA_MVP.md seccion 10.1):** `deck_id` en
+> `study_sessions`, `srs_states` y `srs_responses` es TEXT (slug), no UUID.
+> Usar el valor de la URL `/deck/{deckId}/...` tal cual, sin conversion.
+
 **Objetivo:** El usuario completa sesiones de estudio con cuestionarios de 4 tipos, evaluacion por IA, y repaso SRS con el algoritmo FSRS real.
 
 **Pantallas:** P5.1, P5.4, P5.5, P5.6, P5.7, P5.8
@@ -210,6 +214,12 @@ npm i recharts canvas-confetti
 
 ## Sprint 4 -- LLM WIKI + DASHBOARD: Inteligencia y Metricas
 
+> **Nota de esquema (ver ARQUITECTURA_MVP.md seccion 10.1):** `GET /dashboard/metrics`
+> debe agregar via `decks.user_id = auth.uid()` y luego filtrar otras tablas con
+> `deck_id IN (SELECT id FROM decks WHERE ...)`. `decks.id` es TEXT, no UUID —
+> cualquier tabla nueva (ej. para `graph/communities` o `lint_reports`) debe
+> declarar `deck_id TEXT`.
+
 **Objetivo:** El usuario puede consultar su wiki con lenguaje natural (LLM Wiki real con Gemini), ver metricas detalladas de progreso, y diagnosticar la salud de su mazo.
 
 **Pantallas:** P6.1, P6.2, P6.3, P3.3
@@ -252,6 +262,14 @@ npm i recharts canvas-confetti
 ---
 
 ## Sprint 5 -- AUTH + CONFIG + CIERRE: Seguridad, Onboarding y Pulido
+
+> **Nota de esquema (ver ARQUITECTURA_MVP.md seccion 10.1):** los mazos creados
+> en Sprints 1-4 (desarrollo sin auth) tienen `decks.user_id = NULL`. Al activar
+> el middleware JWT, decidir: (a) asignarlos a un usuario admin/seed, o (b)
+> requerir que el usuario los re-cree. Las policies RLS abiertas (`*_open`,
+> `USING(true)`) en `decks`, `ingest_jobs`, `srs_states`, `srs_responses`,
+> `study_sessions`, `schedule_slots`, `wiki_chat_messages`, `lint_reports`
+> deben eliminarse explicitamente — quedan activas por defecto desde Sprint 1.
 
 **Objetivo:** El sistema esta completo para multiples usuarios. Autenticacion, onboarding guiado de 6 pasos, configuracion de cuenta y exportacion.
 

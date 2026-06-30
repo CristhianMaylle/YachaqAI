@@ -1,5 +1,18 @@
 const API_URL = import.meta.env.VITE_FASTAPI_URL ?? 'http://localhost:8000';
 
+export async function createNotebook(name: string): Promise<{ id: string; name: string }> {
+  const res = await fetch('/api/notebooks/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error al crear el mazo' }));
+    throw new Error(err.detail ?? 'Error al crear el mazo');
+  }
+  return res.json();
+}
+
 export async function fetchNotebook(deckId: string, params?: string) {
   const url = params ? `/api/notebooks/${deckId}?${params}` : `/api/notebooks/${deckId}`;
   const res = await fetch(url);
