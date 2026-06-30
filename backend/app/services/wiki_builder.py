@@ -177,6 +177,26 @@ def create_notebook(name: str) -> dict:
     return meta
 
 
+def register_deck(deck_id: str, name: str) -> None:
+    """Inserta la fila correspondiente en la tabla `decks` (Postgres).
+
+    Debe llamarse junto con create_notebook() para que el Dashboard
+    (que lee de Postgres, no de Storage) muestre el mazo recien creado.
+    """
+    sb = get_supabase()
+    sb.table("decks").insert({
+        "id": deck_id,
+        "name": name,
+        "wiki_path": f"{deck_id}/",
+    }).execute()
+
+
+def touch_deck(deck_id: str) -> None:
+    """Actualiza updated_at de un deck (dispara el trigger deck_updated_at)."""
+    sb = get_supabase()
+    sb.table("decks").update({"wiki_path": f"{deck_id}/"}).eq("id", deck_id).execute()
+
+
 def delete_notebook(deck_id: str) -> None:
     _delete_prefix(WIKI_BUCKET, deck_id)
     _delete_prefix(PDF_BUCKET, deck_id)
@@ -309,6 +329,32 @@ def build_graph(deck_id: str) -> dict:
     pages = get_all_pages(deck_id)
     node_map: dict[str, dict] = {}
 
+    # Indice de busqueda: mapea slug/id/file/stem a page_id
+    lookup: dict[str, str] = {}
+    for p in pages:
+        pid = p["page_id"]
+        lookup[pid] = pid
+        lookup[p["file"]] = pid
+        stem = p["file"].split("/")[-1].removesuffix(".md")
+        lookup[stem] = pid
+        fm_id = p["frontmatter"].get("id")
+        if isinstance(fm_id, str):
+            lookup[fm_id] = pid
+
+    def _resolve(ref: str) -> str | None:
+        if not isinstance(ref, str):
+            return None
+        ref = ref.strip()
+        if ref in lookup:
+            return lookup[ref]
+        clean = ref.removesuffix(".md")
+        if clean in lookup:
+            return lookup[clean]
+        base = clean.split("/")[-1]
+        if base in lookup:
+            return lookup[base]
+        return None
+
     for p in pages:
         t = p["type"]
         group = (
@@ -326,37 +372,35 @@ def build_graph(deck_id: str) -> dict:
     edge_map: dict[str, dict] = {}
 
     def _add_edge(src: str, tgt: str, etype: str):
-        key = "--".join(sorted([src, tgt]))
-        if etype == "prerrequisito":
-            key = f"{tgt}--{src}"
+        if src == tgt:
+            return
+        key = f"{tgt}--{src}" if etype == "prerrequisito" else "--".join(sorted([src, tgt]))
         if key not in edge_map:
             edge_map[key] = {"source": src, "target": tgt, "type": etype}
 
     for p in pages:
+        pid = p["page_id"]
+
         for link in extract_wikilinks(p["content"]):
-            tp = next((pg for pg in pages if pg["file"] == link or pg["file"].endswith("/" + link)), None)
-            if tp and tp["page_id"] != p["page_id"]:
-                _add_edge(p["page_id"], tp["page_id"], "relacionado")
+            resolved = _resolve(link)
+            if resolved and resolved != pid:
+                _add_edge(pid, resolved, "relacionado")
 
         for rel in (p["frontmatter"].get("relacionados") or []):
-            if not rel or not isinstance(rel, str):
-                continue
-            tp = next((pg for pg in pages if pg["file"] == rel or pg["file"].endswith("/" + rel)), None)
-            if tp and tp["page_id"] != p["page_id"]:
-                _add_edge(p["page_id"], tp["page_id"], "relacionado")
+            resolved = _resolve(rel)
+            if resolved and resolved != pid:
+                _add_edge(pid, resolved, "relacionado")
 
         for pre in (p["frontmatter"].get("prerrequisitos") or []):
-            if not pre or not isinstance(pre, str):
-                continue
-            tp = next((pg for pg in pages if pg["file"] == pre or pg["file"].endswith("/" + pre)), None)
-            if tp and tp["page_id"] != p["page_id"]:
-                _add_edge(tp["page_id"], p["page_id"], "prerrequisito")
+            resolved = _resolve(pre)
+            if resolved and resolved != pid:
+                _add_edge(resolved, pid, "prerrequisito")
 
         ca = p["frontmatter"].get("concepto_asociado")
         if p["type"] == "pregunta" and isinstance(ca, str):
-            tp = next((pg for pg in pages if pg["file"] == ca or pg["file"].endswith("/" + ca) or pg["file"].endswith("/" + ca + ".md")), None)
-            if tp and tp["page_id"] != p["page_id"]:
-                _add_edge(p["page_id"], tp["page_id"], "pregunta_sobre")
+            resolved = _resolve(ca)
+            if resolved and resolved != pid:
+                _add_edge(pid, resolved, "pregunta_sobre")
 
     return {"nodes": list(node_map.values()), "edges": list(edge_map.values())}
 

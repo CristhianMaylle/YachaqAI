@@ -12,7 +12,7 @@ from app.schemas.ingest import (
     IngestStatusResponse,
 )
 from app.services.wiki_builder import (
-    create_notebook, notebook_exists, upload_pdf, _slugify,
+    notebook_exists, touch_deck, upload_pdf, _slugify,
     _download_text, WIKI_BUCKET,
 )
 
@@ -24,10 +24,16 @@ async def process_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     deck_id: str = Form(...),
-    deck_name: str = Form(""),
+    deck_name: str = Form(""),  # ya no se usa: el deck debe existir previamente
 ):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF")
+
+    if deck_id == "new" or not notebook_exists(deck_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Primero crea un mazo antes de subir material.",
+        )
 
     content = await file.read()
     if len(content) > 100 * 1024 * 1024:
@@ -36,14 +42,9 @@ async def process_pdf(
     job_id = str(uuid4())
     supabase = get_supabase()
     filename = file.filename or "document.pdf"
-
-    if deck_id == "new":
-        deck_id = _slugify(deck_name) if deck_name else str(uuid4())[:8]
-
     safe_filename = _slugify(filename.removesuffix(".pdf")) + ".pdf"
 
-    if not notebook_exists(deck_id):
-        create_notebook(deck_name or deck_id)
+    touch_deck(deck_id)
 
     storage_path = f"{deck_id}/{safe_filename}"
 

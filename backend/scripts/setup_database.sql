@@ -23,8 +23,12 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 -- 2. DECKS
+-- id es TEXT (slug, ej. "redes-de-computadoras"), NO UUID.
+-- El backend lo asigna explicitamente al crear el notebook
+-- (ver app/routers/ingest.py) para que coincida con la ruta
+-- en Supabase Storage (wikis/{deck_id}/) e ingest_jobs.deck_id.
 CREATE TABLE IF NOT EXISTS decks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id TEXT PRIMARY KEY,
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
@@ -60,7 +64,7 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
 -- 4. SCHEDULE_SLOTS
 CREATE TABLE IF NOT EXISTS schedule_slots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
+  deck_id TEXT REFERENCES decks(id) ON DELETE CASCADE,
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   day_of_week INTEGER CHECK (day_of_week BETWEEN 0 AND 6),
   scheduled_date DATE,
@@ -74,7 +78,7 @@ CREATE TABLE IF NOT EXISTS schedule_slots (
 -- 5. STUDY_SESSIONS
 CREATE TABLE IF NOT EXISTS study_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
+  deck_id TEXT REFERENCES decks(id) ON DELETE CASCADE,
   user_id UUID REFERENCES auth.users(id),
   module_slug TEXT NOT NULL,
   session_type TEXT NOT NULL,
@@ -89,7 +93,7 @@ CREATE TABLE IF NOT EXISTS study_sessions (
 -- 6. SRS_STATES
 CREATE TABLE IF NOT EXISTS srs_states (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
+  deck_id TEXT REFERENCES decks(id) ON DELETE CASCADE,
   concept_slug TEXT NOT NULL,
   estado TEXT DEFAULT 'bloqueado',
   maestria REAL DEFAULT 0,
@@ -107,7 +111,7 @@ CREATE TABLE IF NOT EXISTS srs_states (
 CREATE TABLE IF NOT EXISTS srs_responses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   session_id UUID REFERENCES study_sessions(id) ON DELETE CASCADE,
-  deck_id UUID REFERENCES decks(id) ON DELETE CASCADE,
+  deck_id TEXT REFERENCES decks(id) ON DELETE CASCADE,
   concept_slug TEXT NOT NULL,
   question_file TEXT NOT NULL,
   question_type TEXT NOT NULL,
@@ -125,7 +129,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   type TEXT NOT NULL,
   title TEXT NOT NULL,
   body TEXT,
-  deck_id UUID,
+  deck_id TEXT,
   action_url TEXT,
   read BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT now()
