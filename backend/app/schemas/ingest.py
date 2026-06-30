@@ -22,6 +22,7 @@ class ReviewItem(BaseModel):
     related: list[str] = []
     module: str | None = None
     conflict_detail: str | None = None
+    order: int | None = None
 
 
 class ConfirmReviewRequest(BaseModel):
@@ -39,3 +40,4 @@ class IngestStatusResponse(BaseModel):
     error_message: str | None = None
     review_items: list[dict[str, Any]] | None = None
     review_status: str | None = None
+    source_summary: str | None = None

@@ -83,6 +83,7 @@ export interface ReviewItem {
   related: string[];
   module: string | null;
   conflict_detail: string | null;
+  order?: number | null;
 }
 
 export interface IngestJob {
@@ -100,6 +101,7 @@ export interface IngestJob {
   error_message: string | null;
   review_items: ReviewItem[] | null;
   review_status: 'pending' | 'analysis_done' | 'reviewed' | 'generating' | 'completed' | null;
+  source_summary?: string | null;
   created_at: string;
   completed_at: string | null;
 }

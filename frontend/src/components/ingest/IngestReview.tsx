@@ -13,12 +13,13 @@ import type { ReviewItem } from '@/types'
 
 interface Props {
   reviewItems: ReviewItem[]
+  sourceSummary?: string | null
   onConfirm: (items: ReviewItem[]) => void
   onCancel: () => void
   loading?: boolean
 }
 
-export function IngestReview({ reviewItems, onConfirm, onCancel, loading }: Props) {
+export function IngestReview({ reviewItems, sourceSummary, onConfirm, onCancel, loading }: Props) {
   const [items, setItems] = useState<ReviewItem[]>(() =>
     reviewItems.map((item) => ({ ...item })),
   )
@@ -82,6 +83,11 @@ export function IngestReview({ reviewItems, onConfirm, onCancel, loading }: Prop
           Se detectaron {concepts.length} conceptos, {entities.length} entidades y{' '}
           {modules.length} módulos. Revisa y confirma antes de generar la wiki.
         </p>
+        {sourceSummary && (
+          <p className="mt-3 rounded-lg bg-primary/20 p-3 text-sm text-foreground">
+            {sourceSummary}
+          </p>
+        )}
       </div>
 
       {sections.map((section) => (

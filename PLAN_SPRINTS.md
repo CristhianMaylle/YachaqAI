@@ -220,6 +220,11 @@ npm i recharts canvas-confetti
 > cualquier tabla nueva (ej. para `graph/communities` o `lint_reports`) debe
 > declarar `deck_id TEXT`.
 
+> **Nota patron LLM Wiki (Karpathy):** las tareas #2 (Archivar respuesta) y #5
+> (Agente LINT) de este sprint ya cubren las operaciones "Query -> archivado" y
+> "Lint" del patron LLM Wiki — huerfanos, contradicciones, conceptos sin pagina
+> y referencias rotas. No requieren alcance adicional al ya especificado aqui.
+
 **Objetivo:** El usuario puede consultar su wiki con lenguaje natural (LLM Wiki real con Gemini), ver metricas detalladas de progreso, y diagnosticar la salud de su mazo.
 
 **Pantallas:** P6.1, P6.2, P6.3, P3.3

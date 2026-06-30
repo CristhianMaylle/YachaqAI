@@ -254,6 +254,7 @@ export function Upload() {
       {phase === 'review' && (
         <IngestReview
           reviewItems={reviewItems}
+          sourceSummary={jobStatus.source_summary}
           onConfirm={handleConfirmReview}
           onCancel={handleCancelReview}
           loading={confirmLoading}

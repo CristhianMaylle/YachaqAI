@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
   error_message TEXT,
   review_items JSONB,
   review_status TEXT DEFAULT 'pending',
+  source_summary TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   completed_at TIMESTAMPTZ
 );

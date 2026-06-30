@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -157,6 +158,102 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+MAX_ANALYSIS_CHUNKS = 3  # limite duro de llamadas LLM por ingesta (costo/rate-limit)
+
+
+def _split_text(text: str, max_chars: int, max_chunks: int = MAX_ANALYSIS_CHUNKS) -> list[str]:
+    """Divide el texto en fragmentos de hasta max_chars, acotado a max_chunks.
+
+    Documentos mas largos que max_chars * max_chunks se truncan en el ultimo
+    fragmento (igual que el comportamiento anterior) para no disparar el
+    numero de llamadas LLM sin limite.
+    """
+    chunks = [text[i:i + max_chars] for i in range(0, len(text), max_chars)]
+    return chunks[:max_chunks] or [""]
+
+
+async def _analyze_chunks(
+    chunks: list[str],
+    source_name: str,
+    existing_concepts: list[dict],
+    on_progress: "Callable[[int, str], None] | None" = None,
+) -> dict:
+    """Analiza el texto en uno o mas fragmentos. Cuando hay mas de un
+    fragmento, acumula los items ya detectados y se los pasa al modelo en
+    cada llamada subsiguiente para evitar slugs duplicados y para que pueda
+    relacionar conceptos entre fragmentos."""
+    items: list[dict] = []
+    modules: list[dict] = []
+    summaries: list[str] = []
+    seen_slugs: set[str] = set()
+
+    for idx, chunk in enumerate(chunks):
+        if on_progress:
+            pct = 30 + int((idx / max(len(chunks), 1)) * 20)
+            label = (
+                f"Analizando estructura del documento (parte {idx + 1}/{len(chunks)})"
+                if len(chunks) > 1 else "Analizando estructura del documento"
+            )
+            on_progress(pct, label)
+
+        known = existing_concepts + [
+            {"slug": i.get("slug"), "title": i.get("title"), "type": i.get("type")}
+            for i in items
+        ]
+        prompt = ANALYSIS_USER.format(
+            source_name=source_name,
+            text=chunk,
+            existing_concepts=json.dumps(known, ensure_ascii=False) if known else "Ninguno (wiki vacia)",
+        )
+        response = await gateway.generate(prompt=prompt, system=ANALYSIS_SYSTEM, response_format="json")
+        part = _parse_analysis_json(response.text)
+
+        for item in part.get("items", []):
+            slug = item.get("slug") or item.get("title", "unknown")
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            items.append(item)
+
+        for mod in part.get("modules", []):
+            existing_mod = next((m for m in modules if m.get("slug") == mod.get("slug")), None)
+            if existing_mod:
+                existing_mod["concepts"] = list(dict.fromkeys(
+                    (existing_mod.get("concepts") or []) + (mod.get("concepts") or [])
+                ))
+            else:
+                modules.append(mod)
+
+        if part.get("source_summary"):
+            summaries.append(part["source_summary"])
+
+    return {
+        "items": items,
+        "modules": modules,
+        "source_summary": " ".join(summaries)[:2000],
+    }
+
+
+def _existing_pages_context(item: dict, existing_pages: dict[str, dict], limit: int = 3) -> str:
+    """Extractos de paginas wiki ya existentes (de ingestas anteriores) que
+    se relacionan con este item, para que la pagina nueva se integre con lo
+    que ya existe en vez de escribirse en el vacio (patron LLM Wiki)."""
+    if not existing_pages:
+        return ""
+    refs = list(dict.fromkeys((item.get("related") or []) + (item.get("prerequisites") or [])))
+    matches = [existing_pages[r] for r in refs if r in existing_pages][:limit]
+    if not matches:
+        return ""
+    blocks = []
+    for p in matches:
+        _, body = parse_frontmatter(p["content"])
+        blocks.append(f"### {p['title']}\n{body[:500]}")
+    return (
+        "## Paginas existentes relacionadas (integra el contenido nuevo de forma coherente con esto):\n\n"
+        + "\n\n".join(blocks) + "\n\n"
+    )
+
+
 # ── Step 1: Analysis ─────────────────────────────────────────
 
 async def run_ingesta_pipeline(
@@ -210,19 +307,11 @@ async def run_ingesta_pipeline(
                 pass
 
         max_chars = 30_000 if gateway.get_active().get("provider") == "groq" else 80_000
-        prompt = ANALYSIS_USER.format(
-            source_name=source_name,
-            text=raw_text[:max_chars],
-            existing_concepts=json.dumps(existing_concepts, ensure_ascii=False) if existing_concepts else "Ninguno (wiki vacia)",
+        chunks = _split_text(raw_text, max_chars)
+        plan = await _analyze_chunks(
+            chunks, source_name, existing_concepts,
+            on_progress=lambda pct, stage: update("analyzing", pct, stage),
         )
-
-        response = await gateway.generate(
-            prompt=prompt,
-            system=ANALYSIS_SYSTEM,
-            response_format="json",
-        )
-
-        plan = _parse_analysis_json(response.text)
 
         # Sanitizar slugs y enriquecer items
         for item in plan.get("items", []):
@@ -238,6 +327,31 @@ async def run_ingesta_pipeline(
             mod["slug"] = _safe_slug(mod.get("slug", mod.get("title", "unknown")))
             mod["concepts"] = [_safe_slug(c) for c in (mod.get("concepts") or [])]
 
+        # Algunos modelos (ej. DeepSeek) no duplican los modulos dentro de
+        # "items" con type="modulo" como pide el prompt, sino que solo los
+        # listan en "modules". Para no depender de ese comportamiento,
+        # los modulos canonicos siempre se derivan de plan["modules"] y se
+        # fusionan en items (sin duplicar si el modelo si los incluyo).
+        existing_module_slugs = {
+            i["slug"] for i in plan["items"] if i.get("type") == "modulo"
+        }
+        for mod in plan.get("modules", []):
+            if mod["slug"] in existing_module_slugs:
+                continue
+            plan["items"].append({
+                "slug": mod["slug"],
+                "title": mod.get("title", mod["slug"]),
+                "type": "modulo",
+                "action": "create",
+                "summary": mod.get("summary", ""),
+                "prerequisites": [],
+                "related": [],
+                "module": None,
+                "conflict_detail": None,
+                "order": mod.get("order", 0),
+            })
+            existing_module_slugs.add(mod["slug"])
+
         n_concepts = sum(1 for i in plan["items"] if i.get("type") == "concepto")
         n_entities = sum(1 for i in plan["items"] if i.get("type") == "entidad")
         n_modules = sum(1 for i in plan["items"] if i.get("type") == "modulo")
@@ -249,6 +363,7 @@ async def run_ingesta_pipeline(
             concepts_found=n_concepts,
             entities_found=n_entities,
             modules_found=n_modules,
+            source_summary=plan.get("source_summary", "")[:2000],
         )
 
     except Exception as exc:
@@ -264,6 +379,7 @@ async def run_generation_after_review(
     approved_items: list[dict],
     raw_text: str,
     source_name: str,
+    source_summary: str = "",
 ) -> None:
     supabase = get_supabase()
     today = _today()
@@ -284,18 +400,25 @@ async def run_generation_after_review(
 
         # 1. Fuente transformada
         update("generating", 55, "Generando fuente transformada")
-        _write_transformed_source(deck_id, source_name, raw_text, today)
+        _write_transformed_source(deck_id, source_name, raw_text, today, source_summary)
+
+        # Paginas existentes (de ingestas previas) para dar contexto al generar
+        existing_pages: dict[str, dict] = {}
+        try:
+            existing_pages = {p["page_id"]: p for p in get_all_pages(deck_id)}
+        except Exception:
+            pass
 
         # 2. Conceptos
         for idx, concept in enumerate(concepts):
             pct = 60 + int((idx / max(total, 1)) * 20)
             update("generating", pct, f"Generando: {concept['title']}")
-            await _generate_concept(deck_id, concept, raw_text, approved_items, source_name, today)
+            await _generate_concept(deck_id, concept, raw_text, approved_items, source_name, today, existing_pages)
 
         # 3. Entidades
         for entity in entities:
             update("generating", 82, f"Generando: {entity['title']}")
-            await _generate_entity(deck_id, entity, raw_text, source_name, today)
+            await _generate_entity(deck_id, entity, raw_text, source_name, today, existing_pages)
 
         # 4. Modulos
         update("generating", 90, "Generando modulos")
@@ -326,7 +449,7 @@ async def run_generation_after_review(
 # ── Page generators ──────────────────────────────────────────
 
 def _write_transformed_source(
-    deck_id: str, source_name: str, raw_text: str, today: str,
+    deck_id: str, source_name: str, raw_text: str, today: str, source_summary: str = "",
 ) -> None:
     slug = re.sub(r"[^a-z0-9]+", "-", source_name.lower().removesuffix(".pdf")).strip("-")
     fm = {
@@ -336,7 +459,8 @@ def _write_transformed_source(
         "creado": today,
         "fuente_original": source_name,
     }
-    body = f"# {source_name}\n\n{raw_text[:20_000]}"
+    resumen = f"## Resumen\n\n{source_summary}\n\n" if source_summary else ""
+    body = f"# {source_name}\n\n{resumen}{raw_text[:20_000]}"
     _write_page_to_storage(deck_id, f"1. fuentes_transformadas/{slug}.md", fm, body)
 
 
@@ -347,6 +471,7 @@ async def _generate_concept(
     all_items: list[dict],
     source_name: str,
     today: str,
+    existing_pages: dict[str, dict] | None = None,
 ) -> None:
     related_titles = ", ".join(
         i["title"] for i in all_items
@@ -356,6 +481,7 @@ async def _generate_concept(
         i["title"] for i in all_items
         if i["slug"] in concept.get("prerequisites", [])
     )
+    existing_context = _existing_pages_context(concept, existing_pages or {})
 
     prompt = (
         f'Genera una pagina wiki para el concepto "{concept["title"]}".\n\n'
@@ -363,6 +489,7 @@ async def _generate_concept(
         f"Prerrequisitos: {prereq_titles or 'Ninguno'}\n"
         f"Relacionados: {related_titles or 'Ninguno'}\n"
         f"Modulo: {concept.get('module', 'general')}\n\n"
+        f"{existing_context}"
         f"Texto fuente relevante (extracto):\n{raw_text[:6_000]}"
     )
 
@@ -395,12 +522,19 @@ async def _generate_concept(
 
 
 async def _generate_entity(
-    deck_id: str, entity: dict, raw_text: str, source_name: str, today: str,
+    deck_id: str,
+    entity: dict,
+    raw_text: str,
+    source_name: str,
+    today: str,
+    existing_pages: dict[str, dict] | None = None,
 ) -> None:
+    existing_context = _existing_pages_context(entity, existing_pages or {})
     prompt = (
         f'Genera una pagina wiki para la entidad "{entity["title"]}".\n\n'
         f"Resumen: {entity.get('summary', '')}\n"
         f"Relacionados: {', '.join(entity.get('related', []))}\n\n"
+        f"{existing_context}"
         f"Texto fuente relevante (extracto):\n{raw_text[:4_000]}"
     )
 
@@ -492,13 +626,15 @@ def _update_log(
     n_modules: int,
     today: str,
 ) -> None:
+    # Formato "## [fecha] tipo | titulo" para que el log sea parseable con
+    # grep, ej: grep "^## \[" log.md | tail -5
     entry = (
-        f"- {today} — Ingesta de '{source_name}': "
-        f"{n_concepts} conceptos, {n_entities} entidades, {n_modules} modulos generados."
+        f"## [{today}] ingest | {source_name}\n\n"
+        f"- {n_concepts} conceptos, {n_entities} entidades, {n_modules} modulos generados."
     )
     existing = _download_text(WIKI_BUCKET, f"{deck_id}/log.md") or ""
     _, body = parse_frontmatter(existing)
-    new_body = f"{body.strip()}\n{entry}" if body.strip() else f"# Registro de actividad\n\n{entry}"
+    new_body = f"{body.strip()}\n\n{entry}" if body.strip() else f"# Registro de actividad\n\n{entry}"
     fm = {"id": f"log-{deck_id}", "tipo": "log"}
     _write_page_to_storage(deck_id, "log.md", fm, new_body)
 

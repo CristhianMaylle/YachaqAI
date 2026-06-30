@@ -92,6 +92,7 @@ async def get_status(job_id: str):
         error_message=data.get("error_message"),
         review_items=data.get("review_items"),
         review_status=data.get("review_status"),
+        source_summary=data.get("source_summary"),
     )
 
 
@@ -133,6 +134,7 @@ async def confirm_review(
         approved_items=approved,
         raw_text=raw_text,
         source_name=source_name,
+        source_summary=data.get("source_summary") or "",
     )
 
     return {"status": "generating", "approved_count": len(approved)}
