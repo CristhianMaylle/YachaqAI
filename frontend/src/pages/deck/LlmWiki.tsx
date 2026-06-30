@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { fetchGraph } from '@/lib/notebook-api'
 import type { WikiNode, WikiLink } from '@/types'
 
@@ -281,7 +282,7 @@ export function LlmWiki() {
                 ) : (
                   <div
                     className="prose prose-invert prose-xs max-w-none prose-p:my-1 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-strong:text-foreground prose-strong:font-bold prose-headings:text-foreground"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) as string }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(msg.content) as string) }}
                   />
                 )}
               </div>

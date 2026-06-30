@@ -20,7 +20,7 @@ from app.services.wiki_builder import (
     build_graph,
     read_page,
     save_page,
-    parse_frontmatter,
+
     _slugify,
 )
 
@@ -115,8 +115,12 @@ async def get_wiki_page(notebook_id: str, path: str):
 async def save_wiki_page(notebook_id: str, path: str, request: Request):
     if not notebook_exists(notebook_id):
         raise HTTPException(404, "Cuaderno no encontrado")
+    # Rechazar paths con traversal para no escribir fuera del mazo en Storage
+    clean = path.replace("\\", "/")
+    if ".." in clean.split("/"):
+        raise HTTPException(400, "Ruta de archivo invalida")
     body = await request.json()
-    save_page(notebook_id, path, body.get("content", ""))
+    save_page(notebook_id, clean, body.get("content", ""))
     return {"success": True}
 
 
@@ -170,45 +174,3 @@ async def save_note(notebook_id: str, page_id: str, request: Request):
             "deck_id": notebook_id, "page_id": page_id, "content": content, "updated_at": now,
         }).execute()
     return {"success": True}
-
-
-# --- POST /notebooks/{notebook_id}/srs ---
-@router.post("/{notebook_id}/srs")
-async def grade_srs(notebook_id: str, request: Request):
-    if not notebook_exists(notebook_id):
-        raise HTTPException(404, "Cuaderno no encontrado")
-
-    body = await request.json()
-    concept_id = body.get("conceptId", "")
-    grade = body.get("grade", "olvidado")
-
-    pages = get_all_pages(notebook_id)
-    concept = next(
-        (p for p in pages if p["page_id"] == concept_id or p["page_id"] == f"concepto-{concept_id}"),
-        None,
-    )
-    if not concept:
-        raise HTTPException(404, "Concepto no encontrado")
-
-    from datetime import datetime, timedelta
-    import yaml
-
-    now = datetime.utcnow()
-    today = now.strftime("%Y-%m-%d")
-
-    intervals = {"excelente": (21, "dominado", 0.95), "bien": (7, "dominado", 0.85),
-                 "dificil": (3, "en_practica", 0.70), "olvidado": (1, "critico", 0.35)}
-    days, estado, maestria = intervals.get(grade, (1, "critico", 0.35))
-    next_review = (now + timedelta(days=days)).strftime("%Y-%m-%d")
-
-    fm, body = parse_frontmatter(concept["content"])
-    fm.update({"estado_srs": estado, "maestria": maestria, "ultimo_repaso": today,
-               "proximo_repaso": next_review, "actualizado": today})
-    yaml_text = yaml.dump(fm, allow_unicode=True, default_flow_style=False).strip()
-    new_content = f"---\n{yaml_text}\n---\n\n{body}"
-    save_page(notebook_id, concept["file"], new_content)
-
-    return {
-        "success": True, "conceptId": concept_id, "title": concept["title"],
-        "newEstadoSrs": estado, "newMaestria": maestria, "nextReview": next_review,
-    }

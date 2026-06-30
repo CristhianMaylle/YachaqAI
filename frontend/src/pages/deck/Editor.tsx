@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { autocompletion, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
@@ -125,7 +126,7 @@ export function Editor() {
     [wikilinkCompletion],
   );
 
-  const previewHtml = useMemo(() => marked.parse(body) as string, [body]);
+  const previewHtml = useMemo(() => DOMPurify.sanitize(marked.parse(body) as string), [body]);
 
   const encoded = relPath.split("/").map(encodeURIComponent).join("/");
 

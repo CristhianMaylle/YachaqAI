@@ -12,6 +12,7 @@ una misma operación del agente LLM Wiki.
 """
 import json
 import re
+import unicodedata
 import urllib.parse
 from datetime import datetime
 import yaml
@@ -25,6 +26,7 @@ PDF_BUCKET = "pdfs"
 
 # --- Cache en memoria (se limpia por request, no persistente) ---
 _page_cache: dict[str, dict[str, str]] = {}
+_file_list_cache: dict[str, list[str]] = {}
 
 
 def _cache_key(deck_id: str) -> str:
@@ -33,6 +35,61 @@ def _cache_key(deck_id: str) -> str:
 
 def invalidate_cache(deck_id: str) -> None:
     _page_cache.pop(deck_id, None)
+    _file_list_cache.pop(deck_id, None)
+
+
+def _get_markdown_files_cached(deck_id: str) -> list[str]:
+    if deck_id not in _file_list_cache:
+        _file_list_cache[deck_id] = get_markdown_files(deck_id)
+    return _file_list_cache[deck_id]
+
+
+# --- Resolucion de wikilinks ---
+
+def _keywords(s: str) -> set[str]:
+    s = unicodedata.normalize("NFD", s)
+    s = re.sub(r"[̀-ͯ]", "", s)  # quitar marcas de acento
+    words = re.findall(r"[a-z0-9]+", s.lower())
+    return {w for w in words if len(w) > 2}
+
+
+def _resolve_wikilink_path(link_path: str, files: list[str]) -> str:
+    """Resuelve el path crudo de un wikilink [[...]] al archivo .md real del
+    mazo, con 3 niveles de tolerancia:
+
+    1. Coincidencia exacta (con o sin .md)
+    2. Coincidencia exacta por stem (nombre sin carpeta ni extension)
+    3. Similitud por palabras clave (Jaccard >= 0.3), para tolerar que el LLM
+       omita conectores ('de', 'la', 'en') o use titulos en vez de slugs.
+    """
+    clean = link_path.replace("\\", "/").strip().lower()
+    for f in files:
+        if f.lower() == clean or f.lower() == clean + ".md":
+            return f
+    target_stem = clean.split("/")[-1].removesuffix(".md").strip()
+    for f in files:
+        if f.lower().split("/")[-1].removesuffix(".md") == target_stem:
+            return f
+    target_kw = _keywords(target_stem)
+    if not target_kw:
+        return link_path
+    best_file = None
+    best_score = 0.0
+    for f in files:
+        f_stem = f.lower().split("/")[-1].removesuffix(".md")
+        f_kw = _keywords(f_stem)
+        if not f_kw:
+            continue
+        intersection = target_kw & f_kw
+        if not intersection:
+            continue
+        score = len(intersection) / len(target_kw | f_kw)
+        if target_kw <= f_kw or f_kw <= target_kw:
+            score += 0.5
+        if score > best_score:
+            best_score = score
+            best_file = f
+    return best_file if best_file and best_score >= 0.3 else link_path
 
 
 def _get_cached_content(deck_id: str, path: str) -> str | None:
@@ -221,6 +278,7 @@ def _write_page_to_storage(deck_id: str, rel_path: str, frontmatter: dict, body:
     content = f"---\n{fm_text}---\n\n{body}"
     _upload_text(WIKI_BUCKET, _storage_path(deck_id, rel_path), content)
     _set_cached_content(deck_id, rel_path, content)
+    _file_list_cache.pop(deck_id, None)
 
 
 def parse_frontmatter(raw: str) -> tuple[dict, str]:
@@ -258,12 +316,16 @@ def read_page(deck_id: str, rel_path: str) -> dict:
     page_id = fm.get("id", re.sub(r"[^a-z0-9]", "-", rp.removesuffix(".md").lower()))
     title = fm.get("titulo", rp.split("/")[-1].removesuffix(".md").replace("-", " ").title())
 
+    # Lista de archivos del mazo para resolver wikilinks (cacheada en memoria)
+    _md_files = _get_markdown_files_cached(deck_id)
+
     def _wikilink_to_md(m: re.Match) -> str:
         link_path = m.group(1).strip()
         label = (m.group(2) or "").strip()
-        encoded = "/".join(urllib.parse.quote(seg) for seg in link_path.split("/"))
+        resolved = _resolve_wikilink_path(link_path, _md_files)
+        encoded = "/".join(urllib.parse.quote(seg) for seg in resolved.split("/"))
         if not label:
-            base = link_path.split("/")[-1].removesuffix(".md").replace("-", " ").replace("_", " ").title()
+            base = resolved.split("/")[-1].removesuffix(".md").replace("-", " ").replace("_", " ").title()
             label = base
         return f"[{label}](/deck/{deck_id}/wiki/{encoded})"
 

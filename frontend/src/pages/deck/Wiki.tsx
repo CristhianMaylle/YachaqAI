@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef, lazy, Suspense } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import DOMPurify from 'dompurify'
 import { fetchWikiPage, fetchGraph, fetchNotebook, fetchNote, saveNote } from '@/lib/notebook-api'
 import type { WikiNode, WikiLink } from '@/types'
 
@@ -609,7 +610,7 @@ export function Wiki() {
           <article
             ref={articleRef}
             className="prose prose-invert max-w-none text-xs text-foreground leading-relaxed py-4"
-            dangerouslySetInnerHTML={{ __html: page.html }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(page.html) }}
           />
 
           {/* Anterior / Siguiente dentro del modulo */}
@@ -670,7 +671,7 @@ export function Wiki() {
                 </p>
               </div>
               <Link
-                to={`/deck/${deckId}/review?module=${page.page_id.replace('modulo-', '')}`}
+                to={`/deck/${deckId}/sessions/${page.page_id}`}
                 className="px-4 py-2.5 rounded-lg bg-cyan text-background text-xs font-semibold hover:opacity-90 transition-colors shadow-sm flex items-center gap-2 flex-shrink-0"
               >
                 Comenzar Cuestionario

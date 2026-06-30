@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS srs_states (
   ultimo_repaso DATE,
   proximo_repaso DATE,
   veces_olvidado INTEGER DEFAULT 0,
+  fsrs_card_json JSONB,
   updated_at TIMESTAMPTZ DEFAULT now(),
   UNIQUE(deck_id, concept_slug)
 );
