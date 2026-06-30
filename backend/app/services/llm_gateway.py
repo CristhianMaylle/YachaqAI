@@ -53,6 +53,14 @@ LLM_PROVIDERS: dict[str, dict] = {
             {"id": "openai/gpt-oss-120b", "label": "GPT-OSS 120B", "tier": "quality"},
         ],
     },
+    "deepseek": {
+        "env_key": "deepseek_api_key",
+        "label": "DeepSeek Direct",
+        "models": [
+            {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro", "tier": "quality"},
+            {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "fast"},
+        ],
+    },
 }
 
 
@@ -143,6 +151,8 @@ class LLMGateway:
                 return await self._call_anthropic(prompt, system, response_format)
             if self._active_provider == "nvidia":
                 return await self._call_nvidia(prompt, system, response_format)
+            if self._active_provider == "deepseek":
+                return await self._call_deepseek(prompt, system, response_format)
             raise LLMError(f"Proveedor desconocido: {self._active_provider}")
         except LLMError:
             raise
@@ -283,6 +293,46 @@ class LLMGateway:
             usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
         
         return LLMResponse(text=choice.message.content or "", model=self._active_model, provider="nvidia", usage=usage)
+
+    async def _call_deepseek(self, prompt: str, system: str, response_format: str) -> LLMResponse:
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url="https://api.deepseek.com",
+            api_key=self._settings.deepseek_api_key
+        )
+        messages: list[dict] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        kwargs: dict = {
+            "model": self._active_model,
+            "messages": messages,
+            "stream": False
+        }
+
+        # Aplicar razonamiento específico de DeepSeek V4 si corresponde
+        if "v4" in self._active_model.lower():
+            kwargs["reasoning_effort"] = "high"
+            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+
+        if response_format == "json":
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+
+        # Extraer y registrar el razonamiento en los logs si está disponible
+        reasoning = getattr(choice.message, "reasoning", None) or getattr(choice.message, "reasoning_content", None)
+        if reasoning:
+            logger.info(f"DeepSeek Direct Reasoning:\n{reasoning}")
+
+        usage = {}
+        if response.usage:
+            usage = {"input_tokens": response.usage.prompt_tokens, "output_tokens": response.usage.completion_tokens}
+        
+        return LLMResponse(text=choice.message.content or "", model=self._active_model, provider="deepseek", usage=usage)
 
 
 gateway = LLMGateway(settings)
