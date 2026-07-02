@@ -15,6 +15,7 @@ import { LlmWiki } from '@/pages/deck/LlmWiki'
 import { Modules } from '@/pages/deck/Modules'
 import { Health } from '@/pages/deck/Health'
 import { Schedule } from '@/pages/deck/Schedule'
+import { Stats } from '@/pages/deck/Stats'
 import { Settings } from '@/pages/Settings'
 import { SessionPrep } from '@/pages/deck/session/SessionPrep'
 import { QuestionRunner } from '@/pages/deck/session/QuestionRunner'
@@ -60,6 +61,7 @@ export const router = createBrowserRouter([
       { path: 'modules', element: <Modules /> },
       { path: 'health', element: <Health /> },
       { path: 'schedule', element: <Schedule /> },
+      { path: 'stats', element: <Stats /> },
     ],
   },
 ])

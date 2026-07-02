@@ -122,3 +122,36 @@ async def get_session_questions(session_id: str):
             questions_by_concept.append({"concept_slug": c["page_id"], "concept_title": c["title"], "questions": qs})
 
     return {"session_id": session_id, "deck_id": deck_id, "module_slug": module_slug, "data": questions_by_concept}
+
+
+# --- PUT /sessions/{sessionId}/complete ---
+
+RETENTIVA_BY_GRADE = {"excelente": 1.0, "bien": 0.8, "dificil": 0.4, "olvidado": 0.0}
+
+
+@router.put("/{session_id}/complete")
+async def complete_session(session_id: str, request: Request):
+    """Marca una sesion como completada con su duracion y retentiva
+    promedio, para que el dashboard (Sprint 4) pueda calcular tiempo
+    estudiado, racha y retencion real a partir de datos reales."""
+    body = await request.json()
+    duration_seconds: int = body.get("duration_seconds", 0)
+    grades: list[str] = body.get("grades", [])
+
+    retentiva_avg = (
+        sum(RETENTIVA_BY_GRADE.get(g, 0.0) for g in grades) / len(grades)
+        if grades else 0.0
+    )
+
+    sb = get_supabase()
+    result = sb.table("study_sessions").update({
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": duration_seconds,
+        "retentiva_avg": round(retentiva_avg, 4),
+        "concepts_evaluated": len(grades),
+    }).eq("id", session_id).execute()
+
+    if not result.data:
+        raise HTTPException(404, "Sesion no encontrada")
+
+    return {"success": True, "session_id": session_id, "retentiva_avg": round(retentiva_avg, 4)}

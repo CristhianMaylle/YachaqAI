@@ -110,6 +110,17 @@ export async function submitSrsResponse(params: {
   })
 }
 
+export async function completeSession(
+  sessionId: string,
+  durationSeconds: number,
+  grades: string[],
+): Promise<{ success: boolean; session_id: string; retentiva_avg: number }> {
+  return request(`/sessions/${sessionId}/complete`, {
+    method: 'PUT',
+    body: JSON.stringify({ duration_seconds: durationSeconds, grades }),
+  })
+}
+
 export async function fetchDueReviews(deckId: string) {
   return request<{ due_count: number; rehabilitation_session: boolean; concepts: object[] }>(
     `/srs/due?deck_id=${encodeURIComponent(deckId)}`,

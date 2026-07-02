@@ -9,6 +9,7 @@ import {
   Calendar,
   MessageSquare,
   ShieldCheck,
+  BarChart2,
   Plus,
   ChevronLeft,
   ChevronRight,
@@ -27,6 +28,7 @@ const NAV_ITEMS = [
   { suffix: '/review', icon: RotateCcw, label: 'Repaso' },
   { suffix: '/schedule', icon: Calendar, label: 'Calendario' },
   { suffix: '/wiki-chat', icon: MessageSquare, label: 'Chat' },
+  { suffix: '/stats', icon: BarChart2, label: 'Estadísticas' },
   { suffix: '/health', icon: ShieldCheck, label: 'Lint' },
 ]
 

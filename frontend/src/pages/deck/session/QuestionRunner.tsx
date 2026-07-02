@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Loader2, AlertCircle } from 'lucide-react'
 import {
+  completeSession,
   fetchSessionQuestions,
   submitSrsResponse,
   type QuestionItem,
@@ -44,6 +45,7 @@ export function QuestionRunner() {
   } | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<SessionResult[]>([])
+  const startedAtRef = useRef(Date.now())
 
   useEffect(() => {
     if (!sessionId) return
@@ -75,6 +77,7 @@ export function QuestionRunner() {
     if (!pendingGrade?.grade || !deckId || !session) return
     const q = flatQuestions[current]
     setSubmitting(true)
+    let allResults = results
     try {
       const res = await submitSrsResponse({
         sessionId: sessionId!,
@@ -86,8 +89,8 @@ export function QuestionRunner() {
         grade: pendingGrade.grade,
         aiEvaluation: pendingGrade.evalReport ?? null,
       })
-      setResults((prev) => [
-        ...prev,
+      allResults = [
+        ...results,
         {
           conceptSlug: q.concept_slug,
           conceptTitle: q.concept_title,
@@ -95,7 +98,8 @@ export function QuestionRunner() {
           nextReviewDate: res.next_review_date,
           propagated: res.propagated_concepts,
         },
-      ])
+      ]
+      setResults(allResults)
     } catch (e: any) {
       // Non-fatal: still advance so one failed submission doesn't block the session
       console.error('submit error:', e.message)
@@ -106,8 +110,12 @@ export function QuestionRunner() {
     setPendingGrade(null)
     const nextIdx = current + 1
     if (nextIdx >= flatQuestions.length) {
+      const durationSeconds = Math.round((Date.now() - startedAtRef.current) / 1000)
+      completeSession(sessionId!, durationSeconds, allResults.map((r) => r.grade)).catch((e) =>
+        console.error('complete session error:', e.message),
+      )
       navigate(`/deck/${deckId}/session/${moduleSlug}/summary/${sessionId}`, {
-        state: { results, totalQuestions: flatQuestions.length },
+        state: { results: allResults, totalQuestions: flatQuestions.length },
       })
     } else {
       setCurrent(nextIdx)
